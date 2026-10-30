@@ -6,7 +6,13 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.1.0] - Unreleased
+## [0.1.1] - 2026-10-30
+
+### Changed
+- First release published from GitHub Actions through npm trusted publishing (OIDC) with provenance;
+  no long-lived npm token is involved. The package contents are unchanged from 0.1.0.
+
+## [0.1.0] - 2026-10-30
 
 ### Added
 - `GabrielCore`: cookie → token exchange with singleflight refresh and terminal `AUTH_DEAD`;
