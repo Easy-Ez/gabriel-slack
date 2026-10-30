@@ -1,0 +1,72 @@
+name: release-node
+
+# Publishes sdks/node to npm as `gabriel-slack`.
+#   - Real release: push a tag `node-v<version>` matching sdks/node/package.json.
+#   - Rehearsal: run manually (workflow_dispatch) — always a dry run.
+# Authentication uses npm trusted publishing (OIDC) with provenance. Until trusted
+# publishing is configured for the package, the `npm` environment's NPM_TOKEN secret
+# is used for the very first publish (see CONTRIBUTING.md#releasing).
+
+on:
+  push:
+    tags: ["node-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-node
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # The npm environment (and its secrets) is only reachable from node-v* tag runs.
+    environment: ${{ github.event_name == 'push' && 'npm' || '' }}
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # npm trusted publishing + provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Use an npm that supports trusted publishing
+        run: npm install -g npm@^11.5.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm spec:check
+      - run: pnpm oss:check
+
+      - name: Check tag matches package version
+        if: github.event_name == 'push'
+        run: |
+          expected="node-v$(node -p "require('./sdks/node/package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package version ($expected)"
+            exit 1
+          fi
+
+      - name: Publish to npm
+        working-directory: sdks/node
+        run: npm publish ${{ github.event_name == 'push' && '' || '--dry-run' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#node-v}"
+          notes="$(awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' sdks/node/CHANGELOG.md)"
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "gabriel-slack $version (Node.js)" \
+            --notes "${notes:-See sdks/node/CHANGELOG.md}"

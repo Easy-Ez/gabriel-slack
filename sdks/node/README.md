@@ -1,13 +1,13 @@
 # gabriel-slack
 
-TypeScript / Node.js reference implementation of [Gabriel](../../README.md): a typed,
+TypeScript / Node.js reference implementation of [Gabriel](https://github.com/Easy-Ez/gabriel-slack/blob/main/README.md): a typed,
 AI-friendly real-time SDK for the Slack Web client protocol.
 
 > Unofficial and not affiliated with Slack. It acts as the signed-in person: use it only
 > where you are authorized to automate, and treat the session cookie like a password.
 
 * Node.js **≥ 20.10**, ESM only, one runtime dependency ([`ws`](https://github.com/websockets/ws)).
-* Behavior contract: [`spec/behavior.md`](../../spec/behavior.md).
+* Behavior contract: [`spec/behavior.md`](https://github.com/Easy-Ez/gabriel-slack/blob/main/spec/behavior.md).
 
 ```bash
 npm install gabriel-slack
@@ -63,7 +63,7 @@ await client.start();
 process.on("SIGTERM", () => client.stop({ drainMs: 10_000 }));
 ```
 
-More in [`examples/`](./examples): streaming replies to mentions, `:memo:`-reaction thread
+More in [`examples/`](https://github.com/Easy-Ez/gabriel-slack/tree/main/sdks/node/examples): streaming replies to mentions, `:memo:`-reaction thread
 summaries with a sandboxed agent, presence alerts, raw frames. Run one with
 `GABRIEL_COOKIE_D=… pnpm example examples/mention-stream-reply.ts`.
 
@@ -72,7 +72,7 @@ summaries with a sandboxed agent, presence alerts, raw frames. Run one with
 Subscribe with `client.on(type, handler)`, `client.onMessage(matcher, handler)`,
 `client.onThreadReply(handler)`, or pull with `for await (const evt of client.events())`.
 Every payload is plain JSON-serializable data (schema:
-[`spec/schema/events.schema.json`](../../spec/schema/events.schema.json)).
+[`spec/schema/events.schema.json`](https://github.com/Easy-Ez/gabriel-slack/blob/main/spec/schema/events.schema.json)).
 
 | Event | When |
 | :--- | :--- |
@@ -216,7 +216,7 @@ try {
 }
 ```
 
-Codes: see [`spec/behavior.md` §12](../../spec/behavior.md#12-errors). This implementation adds
+Codes: see [`spec/behavior.md` §12](https://github.com/Easy-Ez/gabriel-slack/blob/main/spec/behavior.md#12-errors). This implementation adds
 `LOOP_DETECTED`, `INVALID_ARGUMENT`, `INVALID_STATE` and `SLACK_API_ERROR`.
 
 ## Low-level core
@@ -253,7 +253,7 @@ new GabrielClient({
 ```
 
 `advanced.fetch` and `advanced.createWebSocket` let you route traffic through a proxy or plug
-in test doubles (see [`test/harness.ts`](./test/harness.ts)).
+in test doubles (see [`test/harness.ts`](https://github.com/Easy-Ez/gabriel-slack/blob/main/sdks/node/test/harness.ts)).
 
 ## CLI
 

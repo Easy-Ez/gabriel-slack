@@ -61,6 +61,37 @@ Tests never touch a real workspace: `sdks/node/test/harness.ts` provides an in-m
 New protocol behavior should come with a fixture in `spec/fixtures/normalize/`: a minimal raw
 frame, the context it needs, and the expected event subset. Keep one behavior per file.
 
+## Releasing
+
+Each SDK is released from its own tag:
+
+| SDK | Tag | Workflow |
+| :--- | :--- | :--- |
+| Node.js (`gabriel-slack` on npm) | `node-v<version>` | `.github/workflows/release-node.yml` |
+| Go (planned) | `sdks/go/v<version>` (Go's rule for modules in subdirectories) | — |
+| Python (planned) | `python-v<version>` | — |
+
+Node.js release steps:
+
+1. Bump `version` in `sdks/node/package.json` and add a `## [<version>]` section to `sdks/node/CHANGELOG.md`.
+2. Optional rehearsal: run the **release-node** workflow manually (always a dry run).
+3. Tag and push: `git tag node-v<version> && git push origin node-v<version>`.
+4. The workflow verifies the tag matches the package version, runs every check, publishes to npm with
+   provenance and creates the GitHub release from the changelog section.
+
+Packages are only published from GitHub Actions. `publishConfig.provenance` makes a local `npm publish`
+fail on purpose, so a developer machine's npm credentials can never publish the package.
+
+**Authentication:** npm trusted publishing (OIDC) — no long-lived token. Bootstrapping the very first
+publish (trusted publishing can only be configured on an existing package):
+
+1. On npmjs.com create a granular access token (read and write, short expiry) and store it as the
+   `NPM_TOKEN` secret of the repository's `npm` environment (`gh secret set NPM_TOKEN --env npm`).
+2. Push the first `node-v*` tag.
+3. On the package's npm settings page add a trusted publisher: GitHub Actions, repository
+   `Easy-Ez/gabriel-slack`, workflow `release-node.yml`, environment `npm`.
+4. Delete the `NPM_TOKEN` secret and revoke the token on npmjs.com.
+
 ## Reporting security issues
 
 Please do not open public issues for vulnerabilities. See [SECURITY.md](./SECURITY.md).

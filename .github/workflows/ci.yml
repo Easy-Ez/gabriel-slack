@@ -26,5 +26,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Check npm package contents
+        working-directory: sdks/node
+        run: npm pack --dry-run
       - run: pnpm spec:check
       - run: pnpm oss:check
