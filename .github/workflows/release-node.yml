@@ -56,7 +56,8 @@ jobs:
 
       - name: Publish to npm
         working-directory: sdks/node
-        run: npm publish ${{ github.event_name == 'push' && '' || '--dry-run' }}
+        # Note: '' is falsy in expressions, so the dry-run flag must be the truthy branch.
+        run: npm publish ${{ github.event_name != 'push' && '--dry-run' || '' }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
