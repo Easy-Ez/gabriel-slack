@@ -1,0 +1,51 @@
+{
+  "description": "Reaction on a message",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "reaction_added",
+    "user": "U0ALICE0001",
+    "reaction": "memo",
+    "item": {
+      "type": "message",
+      "channel": "C0GENERAL01",
+      "ts": "1800000002.000100"
+    },
+    "item_user": "U0SELF00001",
+    "event_ts": "1800000016.000100",
+    "ts": "1800000016.000100"
+  },
+  "expected": {
+    "type": "interaction.reaction_added",
+    "eventId": "C0GENERAL01:1800000002.000100:reaction_added:1800000016.000100:U0ALICE0001:memo",
+    "reaction": "memo",
+    "user": {
+      "id": "U0ALICE0001",
+      "displayName": "Alice"
+    },
+    "channel": {
+      "id": "C0GENERAL01",
+      "name": "general"
+    },
+    "target": {
+      "type": "message",
+      "ts": "1800000002.000100"
+    }
+  }
+}

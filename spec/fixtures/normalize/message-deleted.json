@@ -1,0 +1,39 @@
+{
+  "description": "Deleted message ts comes from deleted_ts, not the frame ts",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "subtype": "message_deleted",
+    "channel": "C0GENERAL01",
+    "hidden": true,
+    "deleted_ts": "1800000001.000100",
+    "ts": "1800000013.000100",
+    "event_ts": "1800000013.000100"
+  },
+  "expected": {
+    "type": "message.deleted",
+    "eventId": "C0GENERAL01:1800000001.000100:deleted:1800000013.000100",
+    "deletedTs": "1800000001.000100",
+    "channel": {
+      "id": "C0GENERAL01",
+      "name": "general"
+    }
+  }
+}

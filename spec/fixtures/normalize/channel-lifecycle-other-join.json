@@ -1,0 +1,27 @@
+{
+  "description": "Another member joining is not a lifecycle event for us",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "member_joined_channel",
+    "user": "U0ALICE0001",
+    "channel": "C0GENERAL01"
+  },
+  "expected": null
+}

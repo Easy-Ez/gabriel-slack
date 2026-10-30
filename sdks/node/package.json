@@ -1,0 +1,67 @@
+{
+  "name": "gabriel-slack",
+  "version": "0.1.0",
+  "description": "Typed, AI-friendly real-time SDK for the Slack Web client protocol (session token + cookie)",
+  "license": "MIT",
+  "author": "EzEasy (https://wecando.cc)",
+  "homepage": "https://github.com/Easy-Ez/gabriel-slack/tree/main/sdks/node#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Easy-Ez/gabriel-slack.git",
+    "directory": "sdks/node"
+  },
+  "bugs": {
+    "url": "https://github.com/Easy-Ez/gabriel-slack/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "gabriel": "./dist/cli/gabriel.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20.10"
+  },
+  "sideEffects": false,
+  "keywords": [
+    "slack",
+    "realtime",
+    "websocket",
+    "sdk",
+    "ai-agent",
+    "llm"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "pnpm run typecheck && pnpm run test && pnpm run build",
+    "example": "tsx"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

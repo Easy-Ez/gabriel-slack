@@ -1,0 +1,43 @@
+{
+  "description": "Bot message: origin bot, sender name from bot_profile",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0BOTUSER01",
+    "bot_id": "B0BOT000001",
+    "bot_profile": {
+      "id": "B0BOT000001",
+      "name": "CI Bot",
+      "user_id": "U0BOTUSER01"
+    },
+    "text": "build passed",
+    "ts": "1800000005.000100"
+  },
+  "expected": {
+    "type": "message.created",
+    "origin": "bot",
+    "sender": {
+      "id": "U0BOTUSER01",
+      "isBot": true,
+      "name": "CI Bot"
+    }
+  }
+}

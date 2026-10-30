@@ -1,0 +1,69 @@
+{
+  "description": "Thread reply mentioning the current user via rich_text blocks",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "<@U0SELF00001> look",
+    "thread_ts": "1800000000.000100",
+    "ts": "1800000002.000100",
+    "blocks": [
+      {
+        "type": "rich_text",
+        "elements": [
+          {
+            "type": "rich_text_section",
+            "elements": [
+              {
+                "type": "user",
+                "user_id": "U0SELF00001"
+              },
+              {
+                "type": "text",
+                "text": " look"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "type": "message.created",
+    "eventId": "C0GENERAL01:1800000002.000100:created",
+    "markdown": "@Me look",
+    "thread": {
+      "rootTs": "1800000000.000100",
+      "isReply": true,
+      "broadcast": false
+    },
+    "isThreadReply": true,
+    "threadTs": "1800000000.000100",
+    "mentions": [
+      {
+        "kind": "user",
+        "id": "U0SELF00001",
+        "name": "Me"
+      }
+    ],
+    "isMentioningMe": true
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "description": "thread_broadcast is still one message.created with thread.broadcast = true",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "subtype": "thread_broadcast",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "<!here> fyi",
+    "thread_ts": "1800000000.000100",
+    "ts": "1800000004.000100"
+  },
+  "expected": {
+    "type": "message.created",
+    "subtype": "thread_broadcast",
+    "thread": {
+      "rootTs": "1800000000.000100",
+      "isReply": true,
+      "broadcast": true
+    },
+    "isMentioningMe": true,
+    "markdown": "@here fyi"
+  }
+}

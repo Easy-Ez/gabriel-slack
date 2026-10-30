@@ -1,0 +1,44 @@
+{
+  "description": "Activity inbox badge snapshot with the official mention roll-up",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "badge_counts_updated",
+    "activity_v2": {
+      "at_user": 2,
+      "at_user_group": 1,
+      "at_channel": 0,
+      "keyword": 1,
+      "thread_v2": 4,
+      "message_reaction": 3,
+      "some_future_key": 9
+    },
+    "event_ts": "1800000018.000100"
+  },
+  "expected": {
+    "type": "unread.badge_counts",
+    "mode": "activity_v2",
+    "mentionCount": 4,
+    "activity": {
+      "at_user": 2,
+      "thread_v2": 4,
+      "some_future_key": 9
+    }
+  }
+}

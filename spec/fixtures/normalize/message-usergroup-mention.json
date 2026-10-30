@@ -1,0 +1,40 @@
+{
+  "description": "Mention of a user group the current user belongs to counts as mentioning me",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "<!subteam^S0ONCALL001|@oncall> help",
+    "ts": "1800000003.000100"
+  },
+  "expected": {
+    "type": "message.created",
+    "markdown": "@oncall help",
+    "mentions": [
+      {
+        "kind": "usergroup",
+        "id": "S0ONCALL001",
+        "name": "oncall"
+      }
+    ],
+    "isMentioningMe": true
+  }
+}

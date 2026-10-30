@@ -1,0 +1,44 @@
+{
+  "description": "message_changed carrying streaming_state is an AI stream event, never message.updated",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "subtype": "message_changed",
+    "channel": "C0GENERAL01",
+    "ts": "1800000012.000200",
+    "event_ts": "1800000012.000200",
+    "message": {
+      "type": "message",
+      "user": "U0AIBOT0001",
+      "bot_id": "B0AIBOT0001",
+      "text": "partial answer",
+      "streaming_state": "in_progress",
+      "ts": "1800000007.000100",
+      "thread_ts": "1800000000.000100"
+    }
+  },
+  "expected": {
+    "type": "ai.stream_updated",
+    "eventId": "C0GENERAL01:1800000007.000100:ai_stream_updated:1800000012.000200",
+    "streamingState": "in_progress",
+    "markdown": "partial answer",
+    "threadTs": "1800000000.000100"
+  }
+}

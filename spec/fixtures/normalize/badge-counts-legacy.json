@@ -1,0 +1,48 @@
+{
+  "description": "Classic sidebar badge snapshot",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "badge_counts_updated",
+    "counts": {
+      "dms": 1,
+      "app_dms": 0,
+      "channels": 5,
+      "thread_mentions": 2,
+      "thread_unreads": 7
+    },
+    "alerts": {
+      "saved_reminder": 1
+    }
+  },
+  "expected": {
+    "type": "unread.badge_counts",
+    "mode": "legacy",
+    "counts": {
+      "dms": 1,
+      "appDms": 0,
+      "channels": 5,
+      "threadMentions": 2,
+      "threadUnreads": 7
+    },
+    "alerts": {
+      "saved_reminder": 1
+    }
+  }
+}

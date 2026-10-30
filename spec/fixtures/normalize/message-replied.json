@@ -1,0 +1,42 @@
+{
+  "description": "message_replied is thread summary metadata",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "subtype": "message_replied",
+    "channel": "C0GENERAL01",
+    "hidden": true,
+    "ts": "1800000000.000100",
+    "event_ts": "1800000014.000100",
+    "message": {
+      "type": "message",
+      "user": "U0ALICE0001",
+      "thread_ts": "1800000000.000100",
+      "reply_count": 2,
+      "latest_reply": "1800000014.000050"
+    }
+  },
+  "expected": {
+    "type": "message.thread_meta_updated",
+    "threadRootTs": "1800000000.000100",
+    "replyCount": 2,
+    "latestReplyTs": "1800000014.000050"
+  }
+}

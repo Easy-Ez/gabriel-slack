@@ -1,0 +1,32 @@
+{
+  "description": "A message from the current user that this client did not send",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0SELF00001",
+    "text": "typed in the browser",
+    "ts": "1800000006.000100"
+  },
+  "expected": {
+    "type": "message.created",
+    "origin": "self_other_client"
+  }
+}

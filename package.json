@@ -1,0 +1,16 @@
+{
+  "name": "gabriel-monorepo",
+  "private": true,
+  "description": "Gabriel: multi-language real-time SDKs for the Slack Web client protocol",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20.10"
+  },
+  "scripts": {
+    "build": "pnpm --filter gabriel-slack build",
+    "typecheck": "pnpm --filter gabriel-slack typecheck",
+    "test": "pnpm --filter gabriel-slack test",
+    "spec:check": "node scripts/spec-check.mjs",
+    "oss:check": "node scripts/oss-leak-check.mjs"
+  }
+}

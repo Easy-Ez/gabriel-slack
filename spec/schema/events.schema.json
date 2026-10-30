@@ -1,0 +1,1446 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wecando.cc/gabriel-slack/schemas/events/v0.json",
+  "title": "Gabriel high-level events",
+  "description": "Serializable payloads of every high-level event. Convenience methods (e.g. toLLMContext) are not part of the payload.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/message.created"
+    },
+    {
+      "$ref": "#/$defs/message.updated"
+    },
+    {
+      "$ref": "#/$defs/message.deleted"
+    },
+    {
+      "$ref": "#/$defs/message.thread_meta_updated"
+    },
+    {
+      "$ref": "#/$defs/message.other"
+    },
+    {
+      "$ref": "#/$defs/ai.stream_updated"
+    },
+    {
+      "$ref": "#/$defs/ai.stream_completed"
+    },
+    {
+      "$ref": "#/$defs/presence.changed"
+    },
+    {
+      "$ref": "#/$defs/user.status_changed"
+    },
+    {
+      "$ref": "#/$defs/user.dnd_changed"
+    },
+    {
+      "$ref": "#/$defs/user.subteam_updated"
+    },
+    {
+      "$ref": "#/$defs/interaction.typing"
+    },
+    {
+      "$ref": "#/$defs/interaction.reaction_added"
+    },
+    {
+      "$ref": "#/$defs/interaction.reaction_removed"
+    },
+    {
+      "$ref": "#/$defs/channel.lifecycle"
+    },
+    {
+      "$ref": "#/$defs/channel.marked"
+    },
+    {
+      "$ref": "#/$defs/unread.activity"
+    },
+    {
+      "$ref": "#/$defs/unread.badge_counts"
+    },
+    {
+      "$ref": "#/$defs/connection.ready"
+    },
+    {
+      "$ref": "#/$defs/connection.reconnecting"
+    },
+    {
+      "$ref": "#/$defs/connection.gap"
+    },
+    {
+      "$ref": "#/$defs/auth.refreshed"
+    },
+    {
+      "$ref": "#/$defs/auth.dead"
+    },
+    {
+      "$ref": "#/$defs/guard.loop_detected"
+    },
+    {
+      "$ref": "#/$defs/guard.protocol_drift"
+    },
+    {
+      "$ref": "#/$defs/guard.overflow"
+    },
+    {
+      "$ref": "#/$defs/guard.lease_expired"
+    }
+  ],
+  "$defs": {
+    "Ts": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$"
+    },
+    "UserRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "handle": {
+          "type": "string"
+        },
+        "isBot": {
+          "type": "boolean"
+        },
+        "isExternal": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "UserBrief": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "displayName": {
+          "type": "string"
+        },
+        "handle": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "ChannelRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "isPrivate": {
+          "type": "boolean"
+        },
+        "isIm": {
+          "type": "boolean"
+        },
+        "isMpim": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "Origin": {
+      "enum": [
+        "this_client",
+        "self_other_client",
+        "other_user",
+        "bot"
+      ]
+    },
+    "FileRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "size": {
+          "type": "integer"
+        },
+        "urlPrivate": {
+          "type": "string"
+        },
+        "permalink": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "mimeType",
+        "urlPrivate"
+      ],
+      "additionalProperties": false
+    },
+    "Mention": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "user",
+            "usergroup",
+            "broadcast",
+            "keyword"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "UserStatus": {
+      "type": "object",
+      "properties": {
+        "emoji": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "expiration": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "emoji",
+        "text",
+        "expiration"
+      ],
+      "additionalProperties": false
+    },
+    "DndInfo": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "nextStartTs": {
+          "type": "number"
+        },
+        "nextEndTs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "enabled",
+        "nextStartTs",
+        "nextEndTs"
+      ],
+      "additionalProperties": false
+    },
+    "message.created": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message.created"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "ts": {
+          "$ref": "#/$defs/Ts"
+        },
+        "clientMsgId": {
+          "type": "string"
+        },
+        "delivery": {
+          "enum": [
+            "realtime",
+            "backfill"
+          ]
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "text": {
+          "type": "string"
+        },
+        "markdown": {
+          "type": "string"
+        },
+        "sender": {
+          "$ref": "#/$defs/UserRef"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "thread": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rootTs": {
+                  "$ref": "#/$defs/Ts"
+                },
+                "isReply": {
+                  "type": "boolean"
+                },
+                "broadcast": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "rootTs",
+                "isReply",
+                "broadcast"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "isThreadReply": {
+          "type": "boolean"
+        },
+        "threadTs": {
+          "$ref": "#/$defs/Ts"
+        },
+        "mentions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Mention"
+          }
+        },
+        "isMentioningMe": {
+          "type": "boolean"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileRef"
+          }
+        },
+        "subtype": {
+          "type": "string"
+        },
+        "raw": {}
+      },
+      "required": [
+        "type",
+        "eventId",
+        "ts",
+        "delivery",
+        "origin",
+        "text",
+        "markdown",
+        "sender",
+        "channel",
+        "thread",
+        "isThreadReply",
+        "mentions",
+        "isMentioningMe",
+        "files",
+        "raw"
+      ],
+      "additionalProperties": false
+    },
+    "message.updated": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message.updated"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "ts": {
+          "$ref": "#/$defs/Ts"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "sender": {
+          "$ref": "#/$defs/UserRef"
+        },
+        "origin": {
+          "$ref": "#/$defs/Origin"
+        },
+        "currentMarkdown": {
+          "type": "string"
+        },
+        "previousMarkdown": {
+          "type": "string"
+        },
+        "editedAt": {
+          "type": "string"
+        },
+        "threadTs": {
+          "$ref": "#/$defs/Ts"
+        },
+        "raw": {}
+      },
+      "required": [
+        "type",
+        "eventId",
+        "ts",
+        "channel",
+        "sender",
+        "origin",
+        "currentMarkdown",
+        "editedAt",
+        "raw"
+      ],
+      "additionalProperties": false
+    },
+    "message.deleted": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message.deleted"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "deletedTs": {
+          "$ref": "#/$defs/Ts"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "previousMessage": {},
+        "threadTs": {
+          "$ref": "#/$defs/Ts"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "deletedTs",
+        "channel"
+      ],
+      "additionalProperties": false
+    },
+    "message.thread_meta_updated": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message.thread_meta_updated"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "threadRootTs": {
+          "$ref": "#/$defs/Ts"
+        },
+        "replyCount": {
+          "type": "integer"
+        },
+        "latestReplyTs": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "channel",
+        "threadRootTs",
+        "replyCount",
+        "latestReplyTs"
+      ],
+      "additionalProperties": false
+    },
+    "message.other": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "message.other"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "rawSubtype": {
+          "type": "string"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "ts": {
+          "$ref": "#/$defs/Ts"
+        },
+        "rawFrame": {}
+      },
+      "required": [
+        "type",
+        "eventId",
+        "rawSubtype",
+        "rawFrame"
+      ],
+      "additionalProperties": false
+    },
+    "ai.stream_updated": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ai.stream_updated"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "ts": {
+          "$ref": "#/$defs/Ts"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "botProfile": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "appId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "streamingState": {
+          "enum": [
+            "in_progress",
+            "completed"
+          ]
+        },
+        "markdown": {
+          "type": "string"
+        },
+        "threadTs": {
+          "$ref": "#/$defs/Ts"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "ts",
+        "channel",
+        "streamingState",
+        "markdown"
+      ],
+      "additionalProperties": false
+    },
+    "ai.stream_completed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "ai.stream_completed"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "ts": {
+          "$ref": "#/$defs/Ts"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "botProfile": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "appId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "streamingState": {
+          "enum": [
+            "in_progress",
+            "completed"
+          ]
+        },
+        "markdown": {
+          "type": "string"
+        },
+        "threadTs": {
+          "$ref": "#/$defs/Ts"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "ts",
+        "channel",
+        "streamingState",
+        "markdown"
+      ],
+      "additionalProperties": false
+    },
+    "presence.changed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "presence.changed"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "user": {
+          "$ref": "#/$defs/UserBrief"
+        },
+        "presence": {
+          "enum": [
+            "active",
+            "away"
+          ]
+        },
+        "previousPresence": {
+          "enum": [
+            "active",
+            "away",
+            "unknown"
+          ]
+        },
+        "isInitialSnapshot": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "user",
+        "presence",
+        "previousPresence",
+        "isInitialSnapshot"
+      ],
+      "additionalProperties": false
+    },
+    "user.status_changed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "user.status_changed"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "user": {
+          "$ref": "#/$defs/UserBrief"
+        },
+        "currentStatus": {
+          "$ref": "#/$defs/UserStatus"
+        },
+        "previousStatus": {
+          "$ref": "#/$defs/UserStatus"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "user",
+        "currentStatus"
+      ],
+      "additionalProperties": false
+    },
+    "user.dnd_changed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "user.dnd_changed"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "user": {
+          "$ref": "#/$defs/UserBrief"
+        },
+        "dnd": {
+          "$ref": "#/$defs/DndInfo"
+        },
+        "previousDnd": {
+          "$ref": "#/$defs/DndInfo"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "user",
+        "dnd"
+      ],
+      "additionalProperties": false
+    },
+    "user.subteam_updated": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "user.subteam_updated"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "subteamId": {
+          "type": "string"
+        },
+        "handle": {
+          "type": "string"
+        },
+        "memberIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "subteamId",
+        "handle",
+        "memberIds"
+      ],
+      "additionalProperties": false
+    },
+    "interaction.typing": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "interaction.typing"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "channel": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "threadRootTs": {
+          "$ref": "#/$defs/Ts"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "user",
+        "channel"
+      ],
+      "additionalProperties": false
+    },
+    "interaction.reaction_added": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "interaction.reaction_added"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "reaction": {
+          "type": "string"
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "channel": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "message",
+                "file"
+              ]
+            },
+            "ts": {
+              "$ref": "#/$defs/Ts"
+            },
+            "threadRootTs": {
+              "$ref": "#/$defs/Ts"
+            },
+            "fileId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        "itemUserId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "reaction",
+        "user",
+        "channel",
+        "target"
+      ],
+      "additionalProperties": false
+    },
+    "interaction.reaction_removed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "interaction.reaction_removed"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "reaction": {
+          "type": "string"
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "channel": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "target": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "message",
+                "file"
+              ]
+            },
+            "ts": {
+              "$ref": "#/$defs/Ts"
+            },
+            "threadRootTs": {
+              "$ref": "#/$defs/Ts"
+            },
+            "fileId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "additionalProperties": false
+        },
+        "itemUserId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "reaction",
+        "user",
+        "channel",
+        "target"
+      ],
+      "additionalProperties": false
+    },
+    "channel.lifecycle": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "channel.lifecycle"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "action": {
+          "enum": [
+            "joined",
+            "left",
+            "im_created",
+            "renamed",
+            "archived"
+          ]
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "action",
+        "channel"
+      ],
+      "additionalProperties": false
+    },
+    "channel.marked": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "channel.marked"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "lastReadTs": {
+          "$ref": "#/$defs/Ts"
+        },
+        "unreadCount": {
+          "type": "integer"
+        },
+        "mentionCount": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "channel",
+        "lastReadTs",
+        "unreadCount",
+        "mentionCount"
+      ],
+      "additionalProperties": false
+    },
+    "unread.activity": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "unread.activity"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "activityType": {
+          "type": "string"
+        },
+        "isUnread": {
+          "type": "boolean"
+        },
+        "channel": {
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "threadTs": {
+          "$ref": "#/$defs/Ts"
+        },
+        "itemTs": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "activityType"
+      ],
+      "additionalProperties": false
+    },
+    "unread.badge_counts": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "unread.badge_counts"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "activity_v2",
+            "legacy"
+          ]
+        },
+        "activity": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "mentionCount": {
+          "type": "integer"
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "dms": {
+              "type": "integer"
+            },
+            "appDms": {
+              "type": "integer"
+            },
+            "channels": {
+              "type": "integer"
+            },
+            "threadMentions": {
+              "type": "integer"
+            },
+            "threadUnreads": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "dms",
+            "appDms",
+            "channels",
+            "threadMentions",
+            "threadUnreads"
+          ],
+          "additionalProperties": false
+        },
+        "alerts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "raw": {}
+      },
+      "required": [
+        "type",
+        "eventId",
+        "mode",
+        "raw"
+      ],
+      "additionalProperties": false
+    },
+    "connection.ready": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "connection.ready"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "fastReconnect": {
+          "type": "boolean"
+        },
+        "degraded": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "fastReconnect",
+        "degraded"
+      ],
+      "additionalProperties": false
+    },
+    "connection.reconnecting": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "connection.reconnecting"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "integer"
+        },
+        "delayMs": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "attempt",
+        "delayMs"
+      ],
+      "additionalProperties": false
+    },
+    "connection.gap": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "connection.gap"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "cause": {
+          "enum": [
+            "fast_reconnect_reconcile",
+            "cold_resync",
+            "overflow",
+            "state_store_unavailable"
+          ]
+        },
+        "recovered": {
+          "type": "boolean"
+        },
+        "fromTs": {
+          "$ref": "#/$defs/Ts"
+        },
+        "toTs": {
+          "$ref": "#/$defs/Ts"
+        },
+        "recoveredCount": {
+          "type": "integer"
+        },
+        "channelsRecovered": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "threadsRecovered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel": {
+                "type": "string"
+              },
+              "threadTs": {
+                "$ref": "#/$defs/Ts"
+              }
+            },
+            "required": [
+              "channel",
+              "threadTs"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "unrecovered": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "channel": {
+                "type": "string"
+              },
+              "threadTs": {
+                "$ref": "#/$defs/Ts"
+              },
+              "fromTs": {
+                "$ref": "#/$defs/Ts"
+              },
+              "toTs": {
+                "$ref": "#/$defs/Ts"
+              },
+              "reason": {
+                "enum": [
+                  "page_limit",
+                  "api_error",
+                  "rate_limited",
+                  "buffer_overflow"
+                ]
+              }
+            },
+            "required": [
+              "channel",
+              "fromTs",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "cause",
+        "recovered",
+        "recoveredCount",
+        "channelsRecovered",
+        "threadsRecovered",
+        "truncated",
+        "unrecovered"
+      ],
+      "additionalProperties": false
+    },
+    "auth.refreshed": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "auth.refreshed"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "teamId": {
+          "type": "string"
+        },
+        "trigger": {
+          "enum": [
+            "invalid_auth",
+            "token_expired"
+          ]
+        },
+        "refreshedAt": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "teamId",
+        "trigger",
+        "refreshedAt"
+      ],
+      "additionalProperties": false
+    },
+    "auth.dead": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "auth.dead"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "teamId": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "teamId",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "guard.loop_detected": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "guard.loop_detected"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "channelId": {
+          "type": "string"
+        },
+        "threadTs": {
+          "$ref": "#/$defs/Ts"
+        },
+        "replyCountInWindow": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "channelId",
+        "replyCountInWindow"
+      ],
+      "additionalProperties": false
+    },
+    "guard.protocol_drift": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "guard.protocol_drift"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "unknownType": {
+          "type": "string"
+        },
+        "unknownSubtype": {
+          "type": "string"
+        },
+        "sampleFrame": {}
+      },
+      "required": [
+        "type",
+        "eventId",
+        "unknownType",
+        "sampleFrame"
+      ],
+      "additionalProperties": false
+    },
+    "guard.overflow": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "guard.overflow"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "channelId": {
+          "type": "string"
+        },
+        "ts": {
+          "$ref": "#/$defs/Ts"
+        }
+      },
+      "required": [
+        "type",
+        "eventId"
+      ],
+      "additionalProperties": false
+    },
+    "guard.lease_expired": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "guard.lease_expired"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "targetEventId": {
+          "type": "string"
+        },
+        "handlerId": {
+          "type": "string"
+        },
+        "ownerReplicaId": {
+          "type": "string"
+        },
+        "delivery": {
+          "enum": [
+            "at_most_once",
+            "at_least_once"
+          ]
+        },
+        "action": {
+          "enum": [
+            "alert_only",
+            "taken_over"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "targetEventId",
+        "handlerId",
+        "ownerReplicaId",
+        "delivery",
+        "action"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

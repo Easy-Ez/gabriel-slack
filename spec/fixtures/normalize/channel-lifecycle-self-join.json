@@ -1,0 +1,35 @@
+{
+  "description": "Only the current user's membership changes become channel.lifecycle",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "member_joined_channel",
+    "user": "U0SELF00001",
+    "channel": "C0GENERAL01",
+    "event_ts": "1800000019.000100"
+  },
+  "expected": {
+    "type": "channel.lifecycle",
+    "action": "joined",
+    "channel": {
+      "id": "C0GENERAL01",
+      "name": "general"
+    }
+  }
+}

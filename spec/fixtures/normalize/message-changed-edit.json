@@ -1,0 +1,54 @@
+{
+  "description": "A real edit becomes message.updated with previous and current markdown",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "subtype": "message_changed",
+    "channel": "C0GENERAL01",
+    "hidden": true,
+    "ts": "1800000011.000200",
+    "event_ts": "1800000011.000200",
+    "message": {
+      "type": "message",
+      "user": "U0ALICE0001",
+      "text": "new text",
+      "ts": "1800000001.000100",
+      "edited": {
+        "user": "U0ALICE0001",
+        "ts": "1800000011.000000"
+      }
+    },
+    "previous_message": {
+      "type": "message",
+      "user": "U0ALICE0001",
+      "text": "old text",
+      "ts": "1800000001.000100"
+    }
+  },
+  "expected": {
+    "type": "message.updated",
+    "eventId": "C0GENERAL01:1800000001.000100:updated:1800000011.000200",
+    "ts": "1800000001.000100",
+    "currentMarkdown": "new text",
+    "previousMarkdown": "old text",
+    "editedAt": "1800000011.000000",
+    "origin": "other_user"
+  }
+}

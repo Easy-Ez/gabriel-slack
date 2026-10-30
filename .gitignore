@@ -1,0 +1,24 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Credentials and local state — never commit
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+.gabriel/
+*.pem
+*.key
+
+# Local-only leak-check word list (contains the very identifiers it guards against)
+.oss-denylist.txt
+
+
+# Private research repository (Easy-Ez/gabriel-slack-internal), never part of the public repo
+internal/
+# Legacy location of the local phase-1 credentials file
+mvp-demo/

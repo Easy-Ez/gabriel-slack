@@ -1,0 +1,35 @@
+{
+  "description": "Read cursor moved",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "channel_marked",
+    "channel": "C0GENERAL01",
+    "ts": "1800000002.000100",
+    "unread_count_display": 1,
+    "mention_count_display": 0,
+    "event_ts": "1800000017.000100"
+  },
+  "expected": {
+    "type": "channel.marked",
+    "lastReadTs": "1800000002.000100",
+    "unreadCount": 1,
+    "mentionCount": 0
+  }
+}
