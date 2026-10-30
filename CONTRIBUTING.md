@@ -82,15 +82,13 @@ Node.js release steps:
 Packages are only published from GitHub Actions. `publishConfig.provenance` makes a local `npm publish`
 fail on purpose, so a developer machine's npm credentials can never publish the package.
 
-**Authentication:** npm trusted publishing (OIDC) — no long-lived token. Bootstrapping the very first
-publish (trusted publishing can only be configured on an existing package):
+**Authentication:** npm trusted publishing (OIDC) bound to this repository, the `release-node.yml`
+workflow and the `npm` environment. No npm token is stored anywhere, and the environment is only
+reachable from `node-v*` tag runs.
 
-1. On npmjs.com create a granular access token (read and write, short expiry) and store it as the
-   `NPM_TOKEN` secret of the repository's `npm` environment (`gh secret set NPM_TOKEN --env npm`).
-2. Push the first `node-v*` tag.
-3. On the package's npm settings page add a trusted publisher: GitHub Actions, repository
-   `Easy-Ez/gabriel-slack`, workflow `release-node.yml`, environment `npm`.
-4. Delete the `NPM_TOKEN` secret and revoke the token on npmjs.com.
+**After publishing:** npm runs an automated review on every new version. Until it finishes, the version
+shows as "Validating" on npmjs.com, cannot be installed yet, and `latest` keeps pointing at the previous
+version. This normally clears on its own; nothing needs to be re-run.
 
 ## Reporting security issues
 

@@ -3,9 +3,8 @@ name: release-node
 # Publishes sdks/node to npm as `gabriel-slack`.
 #   - Real release: push a tag `node-v<version>` matching sdks/node/package.json.
 #   - Rehearsal: run manually (workflow_dispatch) — always a dry run.
-# Authentication uses npm trusted publishing (OIDC) with provenance. Until trusted
-# publishing is configured for the package, the `npm` environment's NPM_TOKEN secret
-# is used for the very first publish (see CONTRIBUTING.md#releasing).
+# Authentication uses npm trusted publishing (OIDC) with provenance; no npm token is
+# stored. NPM_TOKEN below is an emergency fallback only and is normally unset.
 
 on:
   push:
