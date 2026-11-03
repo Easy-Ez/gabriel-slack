@@ -22,3 +22,11 @@ coverage/
 internal/
 # Legacy location of the local phase-1 credentials file
 mvp-demo/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

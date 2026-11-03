@@ -9,7 +9,8 @@ every change must follow. Human-oriented details live in [CONTRIBUTING.md](./CON
 ```text
 spec/                  Language-neutral contract (normative): behavior.md, event JSON Schema, conformance fixtures
 sdks/node/             TypeScript reference SDK (npm: gabriel-slack) + the `gabriel` CLI
-sdks/go/, sdks/python/ Planned SDKs (README describes the intended API shape)
+sdks/python/           Python SDK (distribution gabriel-slack, import gabriel; asyncio, uv) + CLI
+sdks/go/               Planned SDK (README describes the intended API shape)
 docs/                  Architecture overview (EN) and user guide (zh-CN)
 scripts/               spec-check and leak check
 ```
@@ -46,4 +47,13 @@ pnpm spec:check    # TypeScript events ⇔ JSON Schema ⇔ fixtures
 pnpm oss:check     # no secrets, real IDs, internal markers or unlisted docs in tracked files
 ```
 
-Run all of them before committing; CI runs the same set on Node 20, 22 and 24.
+Python SDK (from `sdks/python`, uses `uv`; harness: `tests/harness.py`):
+
+```bash
+uv run pytest
+uv run mypy
+uv run ruff check src tests examples && uv run ruff format --check src tests examples
+```
+
+Run all of them before committing; CI runs the Node set on Node 20, 22 and 24 and the Python set
+on Python 3.11, 3.13 and 3.14.
