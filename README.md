@@ -22,9 +22,9 @@ with safe defaults.
 
 | Language | Package | Status |
 | :--- | :--- | :--- |
-| TypeScript / Node.js | [`gabriel-slack`](./sdks/node) | **Preview (0.1)**: reference implementation |
+| TypeScript / Node.js | [`gabriel-slack`](./sdks/node) | **Preview (0.2)**: reference implementation |
 | Go | [`sdks/go`](./sdks/go) | Planned |
-| Python | [`gabriel-slack`](./sdks/python) (import `gabriel`) | **Preview (0.1)**: asyncio, full parity with the reference |
+| Python | [`gabriel-slack`](./sdks/python) (import `gabriel`) | **Preview (0.1)**: asyncio, full parity with the reference except the in-app sign-in API (`signInWithBrowser()`) |
 
 Every SDK implements the same language-neutral contract in [`spec/`](./spec): a behavior
 specification, a JSON Schema for every event, and shared conformance fixtures.

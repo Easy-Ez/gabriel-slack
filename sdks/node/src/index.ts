@@ -38,6 +38,8 @@ export { toLLMContext } from "./client/llm-context.js";
 export { GabrielCore, KNOWN_FRAME_TYPES } from "./core/core.js";
 export type { GabrielCoreOptions, ProtocolDriftInfo } from "./core/core.js";
 export type { AuthOptions, AuthTeam, AuthState, CookieExchangeResult } from "./core/auth.js";
+export { listWorkspaces, signInWithBrowser } from "./core/sign-in.js";
+export type { SignInOptions, SignInResult, SignInStatus, WorkspaceInfo } from "./core/sign-in.js";
 export type { ClientMetadata, Endpoints } from "./core/metadata.js";
 export { DEFAULT_CLIENT_METADATA, DEFAULT_ENDPOINTS } from "./core/metadata.js";
 export type { FetchLike, MetricsSink, RawMessageFrame, RawWsFrame, RequestOpts, WebSocketFactory, WebSocketLike } from "./core/types.js";

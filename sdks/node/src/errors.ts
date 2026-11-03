@@ -30,7 +30,9 @@ export type GabrielErrorCode =
   | "LOOP_DETECTED"
   | "INVALID_ARGUMENT"
   | "INVALID_STATE"
-  | "SLACK_API_ERROR";
+  | "SLACK_API_ERROR"
+  | "BROWSER_NOT_FOUND"
+  | "SIGN_IN_TIMEOUT";
 
 const RETRYABLE: ReadonlySet<GabrielErrorCode> = new Set<GabrielErrorCode>([
   "RATE_LIMITED",

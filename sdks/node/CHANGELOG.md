@@ -6,6 +6,22 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-03
+
+### Added
+- `signInWithBrowser()`: signs in through a dedicated Chrome / Chromium window with a temporary
+  profile and returns the session cookie plus the signed-in workspaces, for apps that store the
+  cookie themselves (e.g. in the OS keychain). Prints nothing, reports progress through `onStatus`,
+  supports `signal` / `timeoutMs` / `browserPath`, and always deletes the temporary profile.
+- `listWorkspaces()`: verifies a session cookie and lists its workspaces without exposing tokens.
+- Error codes `BROWSER_NOT_FOUND` and `SIGN_IN_TIMEOUT`.
+
+### Changed
+- `gabriel auth login` is built on `signInWithBrowser()`. It now finds the DevTools port through
+  Chrome's `DevToolsActivePort` file instead of guessing a free port, notices a closed sign-in window
+  on macOS, and fails with `BROWSER_NOT_FOUND`, `SIGN_IN_TIMEOUT` or `AUTH_DEAD` instead of
+  `INVALID_ARGUMENT` / `INVALID_STATE` / `NETWORK_TIMEOUT`.
+
 ## [0.1.1] - 2026-10-30
 
 ### Changed

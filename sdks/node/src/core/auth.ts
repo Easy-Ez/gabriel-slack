@@ -1,5 +1,5 @@
 import { GabrielError } from "../errors.js";
-import { Singleflight, sleep } from "../util/async.js";
+import { anySignal, Singleflight, sleep } from "../util/async.js";
 import type { Logger } from "../util/logger.js";
 import { silentLogger } from "../util/logger.js";
 import { redactSecret } from "../util/redact.js";
@@ -134,7 +134,7 @@ export async function exchangeCookie(deps: AuthDeps, cookieD: string, signal?: A
 }
 
 /** Probes a workspace's sign-in policy (e.g. whether SSO is required). Requires no credentials. */
-export async function findTeam(deps: AuthDeps, domain: string): Promise<Record<string, unknown>> {
+export async function findTeam(deps: AuthDeps, domain: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
   const clean = domain.trim().replace(/^https?:\/\//, "").replace(/\.slack\.com\/?$/i, "");
   if (!/^[a-z0-9][a-z0-9-]{0,62}$/i.test(clean)) {
     throw new GabrielError("INVALID_ARGUMENT", "domain: expected a workspace subdomain like \"your-workspace\"");
@@ -143,7 +143,7 @@ export async function findTeam(deps: AuthDeps, domain: string): Promise<Record<s
     method: "POST",
     headers: { ...baseHeaders(deps.metadata), "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ domain: clean }),
-    signal: AbortSignal.timeout(15_000),
+    signal: anySignal(signal, AbortSignal.timeout(15_000)),
   });
   if (!resp.ok) throw new GabrielError("SERVER_ERROR", `auth.findTeam failed (HTTP ${resp.status})`);
   return (await resp.json()) as Record<string, unknown>;
