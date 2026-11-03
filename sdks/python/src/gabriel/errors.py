@@ -35,6 +35,8 @@ GabrielErrorCode = Literal[
     "INVALID_ARGUMENT",
     "INVALID_STATE",
     "SLACK_API_ERROR",
+    "BROWSER_NOT_FOUND",
+    "SIGN_IN_TIMEOUT",
 ]
 
 _RETRYABLE: frozenset[str] = frozenset(

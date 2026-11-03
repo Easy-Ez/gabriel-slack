@@ -67,6 +67,8 @@ await keychain.set(`slack.${workspaces[0]!.teamId}.cookie`, cookieD); // 应用�
 const stillValid = await listWorkspaces(cookieD); // Cookie 失效时抛 AUTH_DEAD
 ```
 
+Python SDK 提供同样的能力：`sign_in_with_browser()` / `list_workspaces()`（时长以秒为单位，见 [Python SDK 文档](../../sdks/python/README.md#signing-in-from-an-app)）。
+
 ## 3. 五分钟上手
 
 被 `@` 时用流式回复作答：

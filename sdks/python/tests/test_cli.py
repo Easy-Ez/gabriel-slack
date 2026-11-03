@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import stat
 from pathlib import Path
+from typing import Any
 
+import httpx
 import pytest
 
+from gabriel.cli import main as cli_main
 from gabriel.cli.main import main
 from gabriel.cli.session_store import (
     delete_session,
@@ -15,6 +18,7 @@ from gabriel.cli.session_store import (
     parse_curl_for_cookie,
     save_session,
 )
+from gabriel.core.sign_in import SignInResult
 from gabriel.errors import GabrielError
 
 
@@ -80,3 +84,55 @@ def test_help_and_unknown_commands(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["auth", "--help"]) == 0
     assert main(["nope"]) == 1
     assert "credential helper" in capsys.readouterr().out
+
+
+def _fake_exchange_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    team = {"id": "T0123456789", "name": "Your Workspace", "domain": "your-workspace"}
+    team |= {"token": "xoxc-test-token-1", "user_id": "U0ALICE0001"}
+    transport = httpx.MockTransport(lambda _request: httpx.Response(200, json={"teams": {"T0123456789": team}}))
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(cli_main.httpx, "AsyncClient", lambda **kw: real_client(transport=transport, **kw))
+
+
+def test_login_signs_in_through_sign_in_with_browser_and_saves(
+    config_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_sign_in(**kwargs: Any) -> SignInResult:
+        calls.append(kwargs)
+        for status in ("opening", "waiting", "verifying", "done"):
+            kwargs["on_status"](status)
+        return SignInResult(cookie_d="xoxd-test-cookie-value", workspaces=[])
+
+    monkeypatch.setattr(cli_main, "sign_in_with_browser", fake_sign_in)
+    monkeypatch.setenv("GABRIEL_CHROME_PATH", "/opt/chromium/chrome")
+    _fake_exchange_client(monkeypatch)
+
+    assert main(["auth", "login", "your-workspace"]) == 0
+
+    assert calls[0]["workspace"] == "your-workspace"
+    assert calls[0]["browser_path"] == "/opt/chromium/chrome"
+    stored = load_session()
+    assert stored is not None
+    assert (stored.cookie_d, stored.workspace) == ("xoxd-test-cookie-value", "your-workspace")
+    out = capsys.readouterr()
+    assert "Opening a sign-in window" in out.err
+    assert "your-workspace (T0123456789) user=U0ALICE0001" in out.out
+    for text in (out.out, out.err):
+        assert "xoxd-test-cookie-value" not in text
+        assert "xoxc-test-token-1" not in text
+
+
+def test_login_saves_nothing_when_sign_in_fails(
+    config_dir: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def fake_sign_in(**kwargs: Any) -> SignInResult:
+        assert kwargs["workspace"] is None
+        raise GabrielError("SIGN_IN_TIMEOUT", "sign-in did not complete within 300 s")
+
+    monkeypatch.setattr(cli_main, "sign_in_with_browser", fake_sign_in)
+    monkeypatch.delenv("GABRIEL_CHROME_PATH", raising=False)
+    assert main(["auth", "login"]) == 1
+    assert load_session() is None
+    assert "SIGN_IN_TIMEOUT" in capsys.readouterr().err

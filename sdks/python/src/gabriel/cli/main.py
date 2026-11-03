@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from collections.abc import Sequence
 
@@ -10,6 +11,7 @@ import httpx
 
 from ..core.auth import AuthDeps, exchange_cookie
 from ..core.metadata import DEFAULT_CLIENT_METADATA, DEFAULT_ENDPOINTS
+from ..core.sign_in import SignInStatus, sign_in_with_browser
 from ..errors import GabrielError
 from ..util.redact import redact_secret
 from .session_store import delete_session, load_session_cookie, parse_curl_for_cookie, save_session, session_file
@@ -48,6 +50,11 @@ async def _describe_session(cookie_d: str) -> None:
     print(f"Session cookie {redact_secret(cookie_d)} is signed in to {len(result.teams)} workspace(s):")
     for t in result.teams:
         print(f"  - {t.domain} ({t.id}) user={t.user_id} token={redact_secret(t.token)}")
+
+
+def _chrome_path() -> str | None:
+    explicit = os.environ.get("GABRIEL_CHROME_PATH")
+    return os.path.abspath(explicit) if explicit else None
 
 
 def _flag(args: Sequence[str], name: str) -> str | None:
@@ -91,10 +98,21 @@ async def run(argv: Sequence[str]) -> int:
         print("Saved session deleted." if delete_session() else "No saved session.")
         return 0
     if cmd == "login":
-        from .browser import browser_login
-
         domain = next((a for a in rest if not a.startswith("--")), None)
-        cookie_d = await browser_login(domain)
+
+        def on_status(status: SignInStatus) -> None:
+            if status == "opening":
+                print(
+                    "Opening a sign-in window — complete the Slack sign-in there; it closes automatically.",
+                    file=sys.stderr,
+                )
+
+        result = await sign_in_with_browser(
+            workspace=domain,
+            browser_path=_chrome_path(),
+            on_status=on_status,
+        )
+        cookie_d = result.cookie_d
         await _describe_session(cookie_d)
         file = save_session(cookie_d, domain)
         print(f"Saved to {file} (mode 0600).")

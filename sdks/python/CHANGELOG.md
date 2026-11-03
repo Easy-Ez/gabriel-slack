@@ -6,6 +6,24 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `sign_in_with_browser()`: signs in through a dedicated Chrome / Chromium window with a temporary
+  profile and returns `SignInResult(cookie_d, workspaces)`, for apps that store the cookie
+  themselves (e.g. in the OS keychain). Prints nothing, reports progress through `on_status`,
+  supports `signal` / `timeout` / `browser_path` and task cancellation, and always deletes the
+  temporary profile. Port of the Node SDK's `signInWithBrowser()`.
+- `list_workspaces()`: verifies a session cookie and lists its workspaces (`WorkspaceInfo`) without
+  exposing tokens.
+- Error codes `BROWSER_NOT_FOUND` and `SIGN_IN_TIMEOUT`.
+
+### Changed
+
+- `gabriel auth login` is built on `sign_in_with_browser()`. It now finds the DevTools port through
+  Chrome's `DevToolsActivePort` file instead of guessing a free port, notices a closed sign-in window
+  on macOS, and fails with `BROWSER_NOT_FOUND`, `SIGN_IN_TIMEOUT` or `AUTH_DEAD` instead of
+  `INVALID_ARGUMENT` / `INVALID_STATE` / `NETWORK_TIMEOUT`.
+
 ## [0.1.0] - 2026-11-03
 
 ### Added

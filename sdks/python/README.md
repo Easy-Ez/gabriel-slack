@@ -48,8 +48,53 @@ when the cookie itself expires.
   `~/.config/gabriel/auth.json` (mode 0600, shared with the Node CLI); `load_session_cookie()`
   reads the environment first, then that file.
 * Use `allowed_teams` to refuse connecting to any other workspace.
+* Desktop apps sign the person in with `sign_in_with_browser()` and keep the cookie in the OS
+  keychain themselves (see [Signing in from an app](#signing-in-from-an-app)).
 
-The SDK never logs, emits or returns tokens or cookies; reprs of credential objects are redacted.
+The SDK never logs or emits tokens or cookies and never returns tokens; reprs of credential
+objects are redacted.
+
+### Signing in from an app
+
+`sign_in_with_browser()` opens a dedicated Chrome / Chromium window with a fresh temporary profile
+on the workspace sign-in page. The person signs in there (SSO included); as soon as the session
+cookie works, the window closes and the cookie is returned together with the signed-in workspaces.
+Nothing is written to `auth.json` and nothing is printed: progress arrives through `on_status`
+only. The temporary profile is deleted whether the sign-in succeeds, fails or is cancelled.
+
+```python
+from gabriel import AbortController, GabrielError, list_workspaces, sign_in_with_browser
+
+ctrl = AbortController()  # e.g. wired to a "Cancel" button; cancelling the task works too
+try:
+    result = await sign_in_with_browser(
+        workspace="your-workspace",  # optional: open this workspace's sign-in page
+        timeout=300.0,  # seconds (default)
+        signal=ctrl.signal,  # abort closes the window
+        on_status=ui.show,  # "opening" | "waiting" | "verifying" | "done"
+    )
+    await keychain.set(f"slack.{result.workspaces[0].team_id.lower()}.cookie", result.cookie_d)
+except GabrielError as err:
+    if err.code != "BROWSER_NOT_FOUND":
+        raise
+    ui.ask_for_chrome()
+
+# Later: check a stored cookie and list its workspaces (no tokens are returned).
+workspaces = await list_workspaces(await keychain.get("slack.t0123456789.cookie"))  # AUTH_DEAD once signed out
+```
+
+`result.workspaces` holds `WorkspaceInfo(team_id, domain, name, user_id)` values, and
+`repr(result)` redacts the cookie.
+
+| Error code | When |
+| :--- | :--- |
+| `BROWSER_NOT_FOUND` | No Chrome / Chromium in the usual locations, `browser_path` does not exist, or it cannot be started. |
+| `SIGN_IN_TIMEOUT` | No completed sign-in within `timeout`. |
+| `CANCELLED` | `signal` aborted, or the person closed the sign-in window. Task cancellation raises `asyncio.CancelledError` as usual. |
+| `AUTH_DEAD` | The person signed in, but Slack keeps rejecting the session cookie. |
+
+`browser_path` takes an absolute path to a Chrome-compatible executable when it is not installed in
+a standard location.
 
 ## Quick start
 
@@ -269,7 +314,9 @@ except GabrielError as err:
     raise
 ```
 
-Codes: see [`spec/behavior.md` §12](https://github.com/Easy-Ez/gabriel-slack/blob/main/spec/behavior.md#12-errors).
+Codes: see [`spec/behavior.md` §12](https://github.com/Easy-Ez/gabriel-slack/blob/main/spec/behavior.md#12-errors), plus the
+reference implementation's `LOOP_DETECTED`, `INVALID_ARGUMENT`, `INVALID_STATE`, `SLACK_API_ERROR`, and
+`BROWSER_NOT_FOUND` / `SIGN_IN_TIMEOUT` for [`sign_in_with_browser()`](#signing-in-from-an-app).
 
 ## Low-level core
 
@@ -318,7 +365,9 @@ gabriel auth status                          # verify and list workspaces (secre
 gabriel auth logout --yes
 ```
 
-`python -m gabriel …` works too. The session file is shared with the Node CLI.
+`python -m gabriel …` works too. The session file is shared with the Node CLI. `auth login` uses
+[`sign_in_with_browser()`](#signing-in-from-an-app); set `GABRIEL_CHROME_PATH` when Chrome / Chromium
+is not installed in a standard location.
 
 ## Python conventions
 

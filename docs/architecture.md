@@ -71,11 +71,12 @@ stateDiagram-v2
 * Refreshed tokens are never handed to application code, and credentials never appear in events,
   logs or errors. A rejected (outdated) browser identity is reported separately so it is never
   mistaken for a dead session.
-* Getting the cookie is the application's job, with help from the SDK: the Node SDK's
-  `signInWithBrowser()` opens a dedicated Chrome window with a temporary profile, lets the person
-  sign in, verifies the cookie and returns it with the signed-in workspaces (never a token);
-  `listWorkspaces()` re-checks a stored cookie. Storage stays with the caller (an OS keychain in a
-  desktop app, `auth.json` for the `gabriel auth login` CLI, which is built on the same function).
+* Getting the cookie is the application's job, with help from the SDK: `signInWithBrowser()`
+  (Python: `sign_in_with_browser()`) opens a dedicated Chrome window with a temporary profile, lets
+  the person sign in, verifies the cookie and returns it with the signed-in workspaces (never a
+  token); `listWorkspaces()` / `list_workspaces()` re-checks a stored cookie. Storage stays with the
+  caller (an OS keychain in a desktop app, `auth.json` for the `gabriel auth login` CLI, which is
+  built on the same function).
 
 ## 4. Connection lifecycle
 
