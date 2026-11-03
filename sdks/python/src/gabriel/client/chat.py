@@ -14,7 +14,15 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 from ..core.types import RequestOpts
 from ..errors import GabrielError
 from ..events.normalize import content_hash
-from ..markdown.chunker import DEFAULT_CHUNK_BUDGET, DEFAULT_CHUNK_MIN, chunk_markdown
+from ..markdown.attribution import (
+    AttributionOverride,
+    DefaultAttribution,
+    RenderedAttribution,
+    markdown_to_plain_text,
+    render_attribution,
+    resolve_attribution,
+)
+from ..markdown.chunker import DEFAULT_CHUNK_BUDGET, DEFAULT_CHUNK_MIN, chunk_markdown, measure_markdown
 from ..util.aio import AbortSignal, sleep
 from ..util.logger import Logger
 from ..util.lru import LruCache
@@ -64,6 +72,7 @@ class ChatHooks(Protocol):
     def before_auto_write(self, channel: str, thread_ts: str | None) -> None: ...
     async def with_unread_guard(self, channel: str, enabled: bool, fn: Callable[[], Awaitable[T]]) -> T: ...
     def note_thread_activity(self, channel: str, thread_ts: str) -> None: ...
+    def self_user_id(self) -> str: ...
 
 
 @dataclass(kw_only=True, slots=True)
@@ -73,11 +82,37 @@ class _Msg:
     blocks: list[Any] | None = None
     thread_ts: str | None = None
     broadcast: bool = False
+    attribution: RenderedAttribution | None = None
 
 
 _CHAT_WINDOW = 2.0
 _NOT_FOUND_RETRY = 0.175
 _NOT_FOUND_RETRIES = 10
+
+
+def _budget_for(attribution: RenderedAttribution | None) -> int:
+    """Chunk budget left for the body once the attribution line is counted."""
+    if attribution is None:
+        return DEFAULT_CHUNK_BUDGET
+    return DEFAULT_CHUNK_BUDGET - measure_markdown(attribution.text).effective
+
+
+def _body_fields(
+    markdown: str | None, blocks: list[Any] | None, attribution: RenderedAttribution | None
+) -> dict[str, Any]:
+    """Body fields of a post or edit.
+
+    With attribution, Markdown goes in a ``markdown`` block after the attribution block
+    (``markdown_text`` cannot be combined with ``blocks``) and ``text`` carries a plain-text fallback.
+    """
+    if attribution is None:
+        return {"markdown_text": markdown} if markdown is not None else {"blocks": blocks}
+    if markdown is None:
+        return {"blocks": [attribution.block, *(blocks or [])]}
+    return {
+        "blocks": [attribution.block, {"type": "markdown", "text": markdown}],
+        "text": markdown_to_plain_text(markdown) or "…",
+    }
 
 
 def _ts_to_seconds(ts: str) -> float:
@@ -93,8 +128,10 @@ class ChatApi:
         hooks: ChatHooks,
         logger: Logger,
         opts: ChatSchedulerOptions | None = None,
+        default_attribution: DefaultAttribution | None = None,
     ) -> None:
         opts = opts or ChatSchedulerOptions()
+        self._default_attribution = default_attribution
         self._core = core
         self._registry = registry
         self._hooks = hooks
@@ -124,6 +161,28 @@ class ChatApi:
     def active_streams(self) -> frozenset[StreamControllerImpl]:
         return frozenset(self._streams)
 
+    def preview_attribution(
+        self,
+        override: AttributionOverride | None = None,
+        *,
+        channel: str | None = None,
+        thread_ts: str | None = None,
+    ) -> RenderedAttribution | None:
+        """The exact attribution line and block a write with ``override`` would carry.
+
+        Returns ``None`` when attribution is off. No request is made; requires a started client
+        (for the self mention).
+        """
+        return self._attribution_for(override, channel or "", thread_ts)
+
+    def _attribution_for(
+        self, override: AttributionOverride | None, channel: str, thread_ts: str | None
+    ) -> RenderedAttribution | None:
+        a = resolve_attribution(self._default_attribution, override)
+        if a is None:
+            return None
+        return render_attribution(a, self_user_id=self._hooks.self_user_id(), channel=channel, thread_ts=thread_ts)
+
     async def send(
         self,
         channel: str,
@@ -135,13 +194,15 @@ class ChatApi:
         priority: Literal["interactive", "normal"] = "normal",
         preserve_unread_cursor: bool = False,
         auto_chunk: bool = True,
+        attribution: AttributionOverride | None = None,
         signal: AbortSignal | None = None,
     ) -> SendResult:
         """Posts standard Markdown (sent as ``markdown_text``) or ``blocks`` — exactly one of them.
 
         Oversized Markdown is split into several messages unless ``auto_chunk=False``;
         ``broadcast`` also posts a thread reply to the channel; ``preserve_unread_cursor``
-        restores the channel's unread cursor after sending (best effort).
+        restores the channel's unread cursor after sending (best effort). ``attribution``
+        overrides the client's attribution line for this write (``False`` = none; spec §9.1).
         """
         channel = assert_channel_id(channel)
         if thread_ts is not None:
@@ -152,19 +213,25 @@ class ChatApi:
             raise GabrielError("INVALID_ARGUMENT", "chat.send: `markdown` must be a non-empty string")
         if signal is not None and signal.aborted:
             raise GabrielError("CANCELLED", "context cancelled before send")
+        rendered = self._attribution_for(attribution, channel, thread_ts)
         self._hooks.before_auto_write(channel, thread_ts)
-        pieces: list[str | None] = list(chunk_markdown(markdown)) if markdown is not None and auto_chunk else [markdown]
+        budget = _budget_for(rendered)
+        pieces: list[str | None] = (
+            list(chunk_markdown(markdown, budget, min(DEFAULT_CHUNK_MIN, math.floor(budget * 0.7))))
+            if markdown is not None and auto_chunk
+            else [markdown]
+        )
         prio: SendPriority = priority
 
         async def ordered() -> SendResult:
             chunk_ts: list[str] = []
             for piece in pieces:
-                msg = _Msg(channel=channel, thread_ts=thread_ts, broadcast=broadcast)
+                msg = _Msg(channel=channel, thread_ts=thread_ts, broadcast=broadcast, attribution=rendered)
                 if piece is not None:
                     msg.markdown = piece
                 else:
                     msg.blocks = blocks
-                chunk_ts.extend(await self._post_with_resplit(msg, prio, auto_chunk, DEFAULT_CHUNK_BUDGET, signal))
+                chunk_ts.extend(await self._post_with_resplit(msg, prio, auto_chunk, budget, signal))
             return SendResult(channel, chunk_ts[0], chunk_ts)
 
         result = await self._hooks.with_unread_guard(
@@ -175,13 +242,21 @@ class ChatApi:
         return result
 
     async def update(
-        self, channel: str, ts: str, markdown: str | None = None, *, blocks: list[Any] | None = None
+        self,
+        channel: str,
+        ts: str,
+        markdown: str | None = None,
+        *,
+        blocks: list[Any] | None = None,
+        attribution: AttributionOverride | None = None,
     ) -> UpdateResult:
+        """Edits a message. ``attribution`` overrides the client's line for this edit (``False`` = none)."""
         channel = assert_channel_id(channel)
         ts = assert_ts(ts)
         if (markdown is None) == (blocks is None):
             raise GabrielError("INVALID_ARGUMENT", "chat.update: pass exactly one of `markdown` or `blocks`")
-        await self._raw_update(channel, ts, markdown, blocks, "normal")
+        rendered = self._attribution_for(attribution, channel, None)
+        await self._raw_update(channel, ts, markdown, blocks, "normal", rendered)
         return UpdateResult(channel, ts)
 
     async def delete(self, channel: str, ts: str) -> None:
@@ -218,22 +293,28 @@ class ChatApi:
         thread_ts: str | None = None,
         initial_markdown: str | None = None,
         preserve_unread_cursor: bool = False,
+        attribution: AttributionOverride | None = None,
         signal: AbortSignal | None = None,
     ) -> StreamController:
-        """Posts a placeholder and returns a latest-wins stream controller."""
+        """Posts a placeholder and returns a latest-wins stream controller.
+
+        ``attribution`` overrides the client's line for every message of this stream (``False`` = none).
+        """
         channel = assert_channel_id(channel)
         if thread_ts is not None:
             assert_ts(thread_ts, "thread_ts")
+        rendered = self._attribution_for(attribution, channel, thread_ts)
         self._hooks.before_auto_write(channel, thread_ts)
         initial = initial_markdown if initial_markdown and initial_markdown.strip() else "…"
+        budget = _budget_for(rendered)
 
         async def post(markdown: str, t_ts: str | None) -> str:
             async def ordered() -> str:
                 posted = await self._post_with_resplit(
-                    _Msg(channel=channel, markdown=markdown, thread_ts=t_ts),
+                    _Msg(channel=channel, markdown=markdown, thread_ts=t_ts, attribution=rendered),
                     "interactive",
                     False,
-                    DEFAULT_CHUNK_BUDGET,
+                    budget,
                     signal,
                 )
                 return posted[0]
@@ -252,14 +333,14 @@ class ChatApi:
                 return await post(markdown, thread_ts)
 
             async def update(self, ts: str, markdown: str) -> None:
-                await chat._raw_update(channel, ts, markdown, None, "stream_update")
+                await chat._raw_update(channel, ts, markdown, None, "stream_update", rendered)
 
         stream = StreamControllerImpl(
             first_ts,
             StreamOptions(
                 channel=channel,
                 thread_ts=thread_ts or None,
-                budget=DEFAULT_CHUNK_BUDGET,
+                budget=budget,
                 min_interval=self._stream_min_interval,
                 linked_signal=signal,
             ),
@@ -279,6 +360,7 @@ class ChatApi:
         thread_ts: str | None = None,
         initial_markdown: str | None = None,
         preserve_unread_cursor: bool = False,
+        attribution: AttributionOverride | None = None,
         signal: AbortSignal | None = None,
     ) -> _StreamContext:
         """``async with chat.stream(channel, thread_ts=...) as s: s.append(chunk)``.
@@ -291,6 +373,7 @@ class ChatApi:
                 thread_ts=thread_ts,
                 initial_markdown=initial_markdown,
                 preserve_unread_cursor=preserve_unread_cursor,
+                attribution=attribution,
                 signal=signal,
             )
         )
@@ -343,7 +426,13 @@ class ChatApi:
                     raise
                 out: list[str] = []
                 for p in pieces:
-                    sub = _Msg(channel=msg.channel, markdown=p, thread_ts=msg.thread_ts, broadcast=msg.broadcast)
+                    sub = _Msg(
+                        channel=msg.channel,
+                        markdown=p,
+                        thread_ts=msg.thread_ts,
+                        broadcast=msg.broadcast,
+                        attribution=msg.attribution,
+                    )
                     out.extend(await self._post_with_resplit(sub, priority, auto_chunk, nxt, signal))
                 return out
             raise
@@ -366,11 +455,8 @@ class ChatApi:
                 "client_msg_id": client_msg_id,
                 "include_channel_perm_error": True,
                 "unfurl": "[]",
+                **_body_fields(msg.markdown, msg.blocks, msg.attribution),
             }
-            if msg.markdown is not None:
-                fields["markdown_text"] = msg.markdown
-            else:
-                fields["blocks"] = msg.blocks
             if msg.thread_ts:
                 fields["thread_ts"] = msg.thread_ts
                 if msg.broadcast:
@@ -405,7 +491,13 @@ class ChatApi:
             deadline.dispose()
 
     async def _raw_update(
-        self, channel: str, ts: str, markdown: str | None, blocks: list[Any] | None, priority: SendPriority
+        self,
+        channel: str,
+        ts: str,
+        markdown: str | None,
+        blocks: list[Any] | None,
+        priority: SendPriority,
+        attribution: RenderedAttribution | None,
     ) -> None:
         self._registry.register_pending_edit(ts)
         deadline = AbortSignal.timeout(self._item_deadline)
@@ -414,11 +506,12 @@ class ChatApi:
         finally:
             deadline.dispose()
         try:
-            fields: dict[str, Any] = {"channel": channel, "ts": ts, "skip_dlp_user_warning": False}
-            if markdown is not None:
-                fields["markdown_text"] = markdown
-            else:
-                fields["blocks"] = blocks
+            fields: dict[str, Any] = {
+                "channel": channel,
+                "ts": ts,
+                "skip_dlp_user_warning": False,
+                **_body_fields(markdown, blocks, attribution),
+            }
             res = await self._with_not_found_retry(
                 ts, lambda: self._core.call_web_api("chat.update", fields, RequestOpts(reason="saveMessageEdit"))
             )

@@ -37,6 +37,7 @@ from ..events.types import (
     UserSubteamUpdatedEvent,
     event_type_of,
 )
+from ..markdown.attribution import AttributionOverride, DefaultAttribution, validate_attribution
 from ..state.store import MemoryStateStore, StateStore
 from ..util.aio import AbortController, AbortSignal, spawn
 from ..util.logger import Logger, stdlib_logger
@@ -223,8 +224,12 @@ class EventContextImpl:
         in_thread: bool = True,
         broadcast: bool = False,
         preserve_unread_cursor: bool = False,
+        attribution: AttributionOverride | None = None,
     ) -> SendResult:
-        """Replies in the trigger's thread (or starts one under the trigger message)."""
+        """Replies in the trigger's thread (or starts one under the trigger message).
+
+        ``attribution`` overrides the client's line (``{"review": "confirmed"}``, or ``False`` = none).
+        """
         self._assert_writable()
         if isinstance(markdown, ReplyOptions):
             opts = markdown
@@ -234,6 +239,7 @@ class EventContextImpl:
                 in_thread=in_thread,
                 broadcast=broadcast,
                 preserve_unread_cursor=preserve_unread_cursor,
+                attribution=attribution,
             )
         channel, thread_ts = self._where(opts.in_thread)
         return await self._client.chat.send(
@@ -243,11 +249,16 @@ class EventContextImpl:
             priority="interactive",
             broadcast=opts.broadcast,
             preserve_unread_cursor=opts.preserve_unread_cursor,
+            attribution=opts.attribution,
             signal=self.signal,
         )
 
     async def reply_stream(
-        self, *, initial_markdown: str | None = None, preserve_unread_cursor: bool = False
+        self,
+        *,
+        initial_markdown: str | None = None,
+        preserve_unread_cursor: bool = False,
+        attribution: AttributionOverride | None = None,
     ) -> StreamController:
         self._assert_writable()
         channel, thread_ts = self._where(True)
@@ -256,6 +267,7 @@ class EventContextImpl:
             thread_ts=thread_ts,
             initial_markdown=initial_markdown,
             preserve_unread_cursor=preserve_unread_cursor,
+            attribution=attribution,
             signal=self.signal,
         )
 
@@ -374,6 +386,7 @@ class GabrielClient:
         hydration: HydrationOptions | None = None,
         loop_guard: LoopGuardOptions | None = None,
         chat: ChatSchedulerOptions | None = None,
+        attribution: DefaultAttribution | None = None,
         recovery: RecoveryOptions | None = None,
         state_store: StateStore | None = None,
         logger: Logger | None = None,
@@ -382,6 +395,8 @@ class GabrielClient:
     ) -> None:
         if not isinstance(auth, AuthOptions):
             raise GabrielError("INVALID_ARGUMENT", "GabrielClient requires `auth`")
+        if attribution is not None:
+            validate_attribution(attribution, "client")
         self._logger: Logger = logger or stdlib_logger()
         self._metrics: MetricsSink = metrics or noop_metrics
         self._store: StateStore = state_store if state_store is not None else MemoryStateStore()
@@ -435,7 +450,10 @@ class GabrielClient:
             def note_thread_activity(self, channel: str, thread_ts: str) -> None:
                 client._marks.watch_thread(channel, thread_ts)
 
-        self.chat = ChatApi(self.core, self._registry, _Hooks(), self._logger, chat)
+            def self_user_id(self) -> str:
+                return client.core.session.user_id
+
+        self.chat = ChatApi(self.core, self._registry, _Hooks(), self._logger, chat, attribution)
         self.threads = ThreadsApi(self.core, self._hydrator, self._marks.watch_thread, self._marks.unwatch_thread)
         self.files = FilesApi(self.core, self._hydrator, self._registry.register_client_msg_id)
         self.search = SearchApi(self.core, self._hydrator)

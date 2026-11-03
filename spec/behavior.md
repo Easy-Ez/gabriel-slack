@@ -148,6 +148,12 @@ preformatted with language, headers, sections, context, tables), else from mrkdw
 attachments. `isMentioningMe` is true for a direct mention of the user, a mention of a user
 group the user belongs to, or `@here` / `@channel` / `@everyone`.
 
+When the first block is an attribution block (§9.1), it is removed before rendering and
+mention extraction, and exposed as `attribution: { text, review? }` on `message.created`,
+`message.updated` (current content) and fetched thread / history messages. `text` is the
+block rendered to Markdown; `review` is the block ID suffix when it is `confirmed`,
+`unconfirmed` or `hidden`, and absent otherwise.
+
 `unread.badge_counts.mentionCount` = sum of `at_user`, `at_user_group`, `at_channel`,
 `at_everyone`, `keyword`, `unjoined_channel_mention`, `list_record_assigned`,
 `list_user_mentioned`, `list_todo_notification`, `list_approval_request`,
@@ -201,6 +207,48 @@ group the user belongs to, or `@here` / `@channel` / `@everyone`.
   workspace rate. Intermediate updates close open code fences on a copy; past the budget the
   message is finalized and continued in a new message. Deleting a streamed message cancels
   the stream.
+
+### 9.1 Agent attribution
+
+Messages written through a session token are indistinguishable from the account owner's own
+messages. An optional attribution line marks them as written by an agent. It is off by
+default and is a self-declared display hint: any client can write the same block.
+
+* Configured once on the client and overridable per write: `false` disables it for one
+  write, a partial preset is merged over a preset default (only `review` over a custom
+  default), and a custom line replaces the default. Two forms:
+  * **Preset** `{ icon, name, role, review }` renders
+    `{icon} {name} ({role}){suffix}`. `icon` defaults to `:robot_face:` (`null` omits it) and
+    must be an emoji shortcode; `name` is required; `role` is optional; `name` and `role`
+    are trimmed, single-line, at most 64 characters, and escaped (`&`, `<`, `>`).
+  * **Custom** `{ text }`: mrkdwn written as given (at most 3,000 effective characters as
+    measured in §9); `{self}` is replaced with `<@SELF>`. `text` may be a function of
+    `{ selfUserId, channel, threadTs, review }`.
+* `review` suffixes, where `<@SELF>` is the sending account:
+
+  | `review` | Suffix |
+  | :--- | :--- |
+  | `confirmed` | ` · confirmed by <@SELF>` |
+  | `unconfirmed` (default) | ` · sent for <@SELF> · not reviewed` |
+  | `hidden` | none |
+
+  `confirmed` is accepted only per write, never as the client default: the SDK cannot know
+  that a person reviewed a message, so the caller must say so for each one.
+* Both forms MUST reject `<!channel>`, `<!here>`, `<!everyone>` and `<!subteam^…>` with
+  `INVALID_ARGUMENT`; client options are validated when the client is created. Scoped views
+  (§11) MUST reject per-write overrides with `SCOPE_POLICY_VIOLATION`, so a tool cannot
+  claim `confirmed` or drop the line.
+* Wire format: `blocks` = `[attribution, body]`, where attribution is
+  `{ type: "context", block_id: "gabriel.attribution.<review|custom>", elements: [{ type:
+  "mrkdwn", text }] }` and body is `{ type: "markdown", text: <markdown> }` (Slack stores it
+  as the same `rich_text` / `table` blocks as `markdown_text`). `text` carries a plain-text
+  fallback of the body (at most 3,000 characters). Caller-supplied `blocks` get the
+  attribution block prepended.
+* Every write carries the block: each auto-chunked message, `chat.update`, and every stream
+  placeholder, refresh and continuation (an update without it would remove the line).
+  Chunk and stream budgets are reduced by the attribution's effective length.
+* SDKs expose a pure renderer and `chat.previewAttribution(override?)` returning the exact
+  `{ text, block }` that would be written (or `null` when disabled).
 
 ## 10. Recovery
 

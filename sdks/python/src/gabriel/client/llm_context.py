@@ -56,6 +56,8 @@ def to_llm_context(evt: MessageCreatedEvent) -> str:
     ]
     if evt.thread is not None:
         lines.append(f"    thread_root_ts: {evt.thread.root_ts}")
+    if evt.attribution is not None:
+        lines.append(f"    attribution: {_one_line(evt.attribution.text)} (self-declared by the sender, unverified)")
     lines.append(f"    mentions_me: {_js_bool(evt.is_mentioning_me)}")
     if evt.files:
         lines.append(f"    files: {', '.join(f'{_one_line(f.name)} ({f.mime_type})' for f in evt.files)}")

@@ -42,6 +42,20 @@ from .errors import GabrielError, GabrielErrorCode, is_gabriel_error
 from .events.normalize import Draft, NormalizeContext, content_hash, lane_key_of, normalize_frame
 from .events.types import *  # noqa: F403
 from .events.types import __all__ as _event_names
+from .markdown.attribution import (
+    ATTRIBUTION_BLOCK_ID,
+    DEFAULT_ATTRIBUTION_ICON,
+    Attribution,
+    AttributionCustom,
+    AttributionInfo,
+    AttributionOverride,
+    AttributionPatch,
+    AttributionPreset,
+    DefaultAttribution,
+    RenderedAttribution,
+    parse_attribution,
+    render_attribution,
+)
 from .markdown.blocks_to_markdown import EntityResolver, convert_blocks_to_markdown, mrkdwn_to_markdown
 from .markdown.chunker import DEFAULT_CHUNK_BUDGET, chunk_markdown, heal_open_fence, measure_markdown
 from .state.file import FileStateStore
@@ -56,6 +70,8 @@ except PackageNotFoundError:  # pragma: no cover - running from a source tree wi
     __version__ = "0.0.0"
 
 __all__ = [
+    "ATTRIBUTION_BLOCK_ID",
+    "DEFAULT_ATTRIBUTION_ICON",
     "DEFAULT_CHUNK_BUDGET",
     "DEFAULT_CLIENT_METADATA",
     "DEFAULT_ENDPOINTS",
@@ -65,12 +81,19 @@ __all__ = [
     "AbortController",
     "AbortSignal",
     "AdvancedOptions",
+    "Attribution",
+    "AttributionCustom",
+    "AttributionInfo",
+    "AttributionOverride",
+    "AttributionPatch",
+    "AttributionPreset",
     "AuthOptions",
     "AuthTeam",
     "ChatSchedulerOptions",
     "ClientMetadata",
     "ConcurrencyOptions",
     "CookieExchangeResult",
+    "DefaultAttribution",
     "Draft",
     "Endpoints",
     "EntityResolver",
@@ -98,6 +121,7 @@ __all__ = [
     "RawWsFrame",
     "ReadPolicy",
     "RecoveryOptions",
+    "RenderedAttribution",
     "ReplyOptions",
     "RequestOpts",
     "ScopePolicy",
@@ -131,7 +155,9 @@ __all__ = [
     "measure_markdown",
     "mrkdwn_to_markdown",
     "normalize_frame",
+    "parse_attribution",
     "redact_secret",
+    "render_attribution",
     "silent_logger",
     "stdlib_logger",
     "to_llm_context",

@@ -1,0 +1,74 @@
+{
+  "description": "Custom attribution line has text but no review",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "Draft attached.",
+    "ts": "1800000004.000100",
+    "blocks": [
+      {
+        "type": "context",
+        "block_id": "gabriel.attribution.custom",
+        "elements": [
+          {
+            "type": "mrkdwn",
+            "text": ":sparkles: drafted by *Paimon* &amp; reviewed by <@U0ALICE0001>"
+          }
+        ]
+      },
+      {
+        "type": "section",
+        "block_id": "b0002",
+        "text": {
+          "type": "mrkdwn",
+          "text": "Draft attached."
+        }
+      }
+    ]
+  },
+  "expected": {
+    "type": "message.created",
+    "eventId": "C0GENERAL01:1800000004.000100:created",
+    "ts": "1800000004.000100",
+    "delivery": "realtime",
+    "origin": "other_user",
+    "text": "Draft attached.",
+    "markdown": "Draft attached.",
+    "sender": {
+      "id": "U0ALICE0001",
+      "isBot": false,
+      "displayName": "Alice"
+    },
+    "channel": {
+      "id": "C0GENERAL01",
+      "name": "general"
+    },
+    "thread": null,
+    "isThreadReply": false,
+    "mentions": [],
+    "isMentioningMe": false,
+    "files": [],
+    "attribution": {
+      "text": ":sparkles: drafted by *Paimon* & reviewed by @Alice"
+    }
+  }
+}

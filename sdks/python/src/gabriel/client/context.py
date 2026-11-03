@@ -21,6 +21,7 @@ from ..events.types import (
 from ..util.validate import compare_ts
 
 if TYPE_CHECKING:
+    from ..markdown.attribution import AttributionOverride
     from ..util.aio import AbortSignal
     from .chat import SendResult
     from .stream import StreamController
@@ -65,6 +66,8 @@ class ReplyOptions:
     in_thread: bool = True
     broadcast: bool = False
     preserve_unread_cursor: bool = False
+    #: Overrides the client's ``attribution`` (``{"review": "confirmed"}``, or ``False`` = none).
+    attribution: AttributionOverride | None = None
 
 
 class EventContext(Protocol):
@@ -82,10 +85,15 @@ class EventContext(Protocol):
         in_thread: bool = True,
         broadcast: bool = False,
         preserve_unread_cursor: bool = False,
+        attribution: AttributionOverride | None = None,
     ) -> SendResult: ...
 
     async def reply_stream(
-        self, *, initial_markdown: str | None = None, preserve_unread_cursor: bool = False
+        self,
+        *,
+        initial_markdown: str | None = None,
+        preserve_unread_cursor: bool = False,
+        attribution: AttributionOverride | None = None,
     ) -> StreamController: ...
 
     async def react(self, emoji: str) -> None: ...

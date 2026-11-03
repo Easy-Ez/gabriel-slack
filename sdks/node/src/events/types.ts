@@ -4,6 +4,8 @@
  * Convenience methods (e.g. `toLLMContext()`) are attached as non-enumerable
  * properties so `JSON.stringify(evt)` stays clean.
  */
+import type { MessageAttribution } from "../markdown/attribution.js";
+
 export interface BaseEvent {
   type: string;
   /**
@@ -66,6 +68,8 @@ export interface MessageCreatedEvent extends BaseEvent {
   text: string;
   /** Standard Markdown (mentions rendered as @name / #channel when resolved). */
   markdown: string;
+  /** Self-declared agent attribution line, removed from `markdown` (spec §9.1). Unverified. */
+  attribution?: MessageAttribution;
   sender: UserRef;
   channel: ChannelRef;
   thread: ThreadInfo | null;
@@ -90,6 +94,8 @@ export interface MessageUpdatedEvent extends BaseEvent {
   origin: MessageOrigin;
   currentMarkdown: string;
   previousMarkdown?: string;
+  /** Attribution line of the current content (spec §9.1). Unverified. */
+  attribution?: MessageAttribution;
   editedAt: string;
   threadTs?: string;
   raw: unknown;

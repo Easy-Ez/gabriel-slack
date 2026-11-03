@@ -53,6 +53,18 @@ export type { Draft, NormalizeContext } from "./events/normalize.js";
 export { convertBlocksToMarkdown, mrkdwnToMarkdown } from "./markdown/blocks-to-markdown.js";
 export type { EntityResolver } from "./markdown/blocks-to-markdown.js";
 export { chunkMarkdown, measureMarkdown, healOpenFence, DEFAULT_CHUNK_BUDGET } from "./markdown/chunker.js";
+export { renderAttribution, parseAttribution, ATTRIBUTION_BLOCK_ID, DEFAULT_ATTRIBUTION_ICON } from "./markdown/attribution.js";
+export type {
+  Attribution,
+  AttributionCustom,
+  AttributionInfo,
+  AttributionOverride,
+  AttributionPreset,
+  AttributionReview,
+  DefaultAttribution,
+  MessageAttribution,
+  RenderedAttribution,
+} from "./markdown/attribution.js";
 
 export { MemoryStateStore } from "./state/store.js";
 export type { StateStore } from "./state/store.js";

@@ -242,12 +242,10 @@ class FakeSlack:
     def _post_message(self, f: dict[str, str], _n: int) -> dict[str, Any]:
         self.posted_ts += 1
         ts = f"{self.posted_ts}.000100"
-        return {
-            "ok": True,
-            "channel": f.get("channel"),
-            "ts": ts,
-            "message": {"ts": ts, "text": f.get("markdown_text", ""), "user": SELF},
-        }
+        message: dict[str, Any] = {"ts": ts, "text": f.get("markdown_text") or f.get("text") or "", "user": SELF}
+        if f.get("blocks"):
+            message["blocks"] = json.loads(f["blocks"])
+        return {"ok": True, "channel": f.get("channel"), "ts": ts, "message": message}
 
     def on(self, method: str, handler: ApiHandler) -> FakeSlack:
         self._api[method] = handler

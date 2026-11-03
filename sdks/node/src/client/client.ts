@@ -6,6 +6,7 @@ import { noopMetrics } from "../core/types.js";
 import type { WsState } from "../core/ws.js";
 import { GabrielError, cancelledError } from "../errors.js";
 import { badgeSnapshotKey, normalizeFrame, type Draft } from "../events/normalize.js";
+import { validateAttribution, type DefaultAttribution } from "../markdown/attribution.js";
 import type { GabrielEvent, GabrielEventMap, GabrielEventType, MessageCreatedEvent, UnreadBadgeCountsEvent } from "../events/types.js";
 import { MemoryStateStore, type StateStore } from "../state/store.js";
 import { withTimeout } from "../util/async.js";
@@ -81,6 +82,13 @@ export interface GabrielClientOptions {
   hydration?: HydrationOptions;
   loopGuard?: LoopGuardOptions;
   chat?: ChatSchedulerOptions;
+  /**
+   * Agent attribution line above every message this client writes (spec/behavior.md §9.1).
+   * Off by default. `{ name: "Paimon", role: "Assistant" }` renders
+   * `:robot_face: Paimon (Assistant) · sent for @Me · not reviewed`; preview it with
+   * `client.chat.previewAttribution()`.
+   */
+  attribution?: DefaultAttribution;
   recovery?: RecoveryOptions;
   /** Defaults to MemoryStateStore. */
   stateStore?: StateStore;
@@ -189,6 +197,7 @@ export class GabrielClient {
 
   constructor(options: GabrielClientOptions) {
     if (!options || !options.auth) throw new GabrielError("INVALID_ARGUMENT", "GabrielClient requires `auth`");
+    if (options.attribution !== undefined) validateAttribution(options.attribution, "client");
     this.logger = options.logger ?? silentLogger;
     this.metrics = options.metrics ?? noopMetrics;
     this.store = options.stateStore ?? new MemoryStateStore();
@@ -233,9 +242,11 @@ export class GabrielClient {
         beforeAutoWrite: (channel, threadTs) => this.checkLoop(channel, threadTs),
         withUnreadGuard: (channel, enabled, fn) => this.unread.run(channel, enabled, fn),
         noteThreadActivity: (channel, threadTs) => this.marks.watchThread(channel, threadTs),
+        selfUserId: () => this.core.session.userId,
       },
       this.logger,
       options.chat,
+      options.attribution,
     );
     this.threads = new ThreadsApi(
       this.core,
@@ -796,6 +807,7 @@ export class GabrielClient {
           priority: "interactive",
           ...(o.broadcast !== undefined ? { broadcast: o.broadcast } : {}),
           ...(o.preserveUnreadCursor !== undefined ? { preserveUnreadCursor: o.preserveUnreadCursor } : {}),
+          ...(o.attribution !== undefined ? { attribution: o.attribution } : {}),
         };
         return this.chat.send(send, signal);
       },
@@ -805,6 +817,7 @@ export class GabrielClient {
           ...where(true),
           ...(o.initialMarkdown !== undefined ? { initialMarkdown: o.initialMarkdown } : {}),
           ...(o.preserveUnreadCursor !== undefined ? { preserveUnreadCursor: o.preserveUnreadCursor } : {}),
+          ...(o.attribution !== undefined ? { attribution: o.attribution } : {}),
         };
         return this.chat.createStream(opts, signal);
       },

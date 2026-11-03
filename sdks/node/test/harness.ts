@@ -92,7 +92,8 @@ export class FakeSlack {
     this.on("usergroups.list", () => ({ ok: true, usergroups: [{ id: "S0ONCALL001", handle: "oncall", users: [SELF, "U0BOB000001"] }] }));
     this.on("chat.postMessage", (f) => {
       const ts = `${++this.postedTs}.000100`;
-      return { ok: true, channel: f.channel, ts, message: { ts, text: f.markdown_text ?? "", user: SELF } };
+      const blocks = f.blocks ? { blocks: JSON.parse(f.blocks) as unknown[] } : {};
+      return { ok: true, channel: f.channel, ts, message: { ts, text: f.markdown_text ?? f.text ?? "", user: SELF, ...blocks } };
     });
     this.on("chat.update", (f) => ({ ok: true, channel: f.channel, ts: f.ts }));
     this.on("client.counts", () => ({ ok: true, channels: [], mpims: [], ims: [] }));

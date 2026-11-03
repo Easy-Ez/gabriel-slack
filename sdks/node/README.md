@@ -181,6 +181,51 @@ and friends belong to the unrestricted client.
 Clean any user-provided text before putting it into search queries (operators like `in:` /
 `from:` widen the search).
 
+### Agent attribution
+
+Messages sent through a session look exactly like messages the person typed. Turn on an
+attribution line to show an agent wrote them — a small line above the message body:
+
+```typescript
+const client = GabrielClient.fromCookie({ cookieD, attribution: { name: "Paimon", role: "Assistant" } });
+
+await client.chat.send({ channel, markdown: "Deployed." });                    // default: not reviewed
+await ctx.reply({ markdown: "Thanks!", attribution: { review: "confirmed" } }); // a person approved this one
+await client.chat.send({ channel, markdown: "typed by me", attribution: false });
+```
+
+Each preset option is one part of the line (`@Me` is the signed-in account):
+
+```text
+:robot_face:  Paimon  (Assistant)  ·  confirmed by @Me
+└── icon ──┘  └name┘  └─ role ──┘     └─── review ───┘
+```
+
+| `review` | Line |
+| :--- | :--- |
+| `"unconfirmed"` (default) | :robot_face: Paimon (Assistant) · sent for @Me · not reviewed |
+| `"confirmed"` | :robot_face: Paimon (Assistant) · confirmed by @Me |
+| `"hidden"` | :robot_face: Paimon (Assistant) |
+
+`icon` defaults to `":robot_face:"` (`null` removes it). `"confirmed"` is accepted per write
+only — the SDK cannot know whether a person reviewed a message, so the caller states it each
+time. For your own wording, pass `text` (mrkdwn; `{self}` becomes the account's mention, and a
+function receives `{ selfUserId, channel, threadTs, review }`):
+
+```typescript
+attribution: { text: ":sparkles: drafted by *Paimon*, reviewed by {self}" }
+```
+
+`client.chat.previewAttribution({ review: "confirmed" })` returns the exact line and block a
+write would carry, without sending anything; `renderAttribution()` does the same offline.
+`@channel` / `@here` / `@everyone` and user group mentions are rejected. The line rides on every
+write (each auto-chunked message, `chat.update`, every stream refresh), and scoped views reject
+per-write overrides so an LLM tool cannot claim `"confirmed"` or drop the line.
+
+Received messages with the line expose it as `evt.attribution` (`{ text, review? }`, also on
+`message.updated`, thread and history messages) and leave it out of `markdown`. Anyone can write
+the same block: treat it as a display hint, never as proof of who wrote a message.
+
 ## Reliability
 
 * **Ordering**: events are dispatched per channel in arrival order even though entity lookups
@@ -244,6 +289,7 @@ new GabrielClient({
   loopGuard: { includeSelfMessages: false, maxAutoRepliesPerMinute: 5 },
   chat: { globalSendConcurrency: 4, itemDeadlineMs: 30_000, streamUpdatesPerSecond: 2,
           streamMinIntervalMs: 500, interruptedNotice: "\n\n_(interrupted)_" },
+  attribution: { icon: ":robot_face:", name: "Paimon", role: "Assistant", review: "unconfirmed" },  // off by default
   recovery: { maxPagesPerChannel: 10, watchedThreadsLimit: 100, resyncBufferLimit: 10_000 },
   stateStore: new FileStateStore({ dir: "/var/lib/my-agent/gabriel" }),
   logger: consoleLogger("info"),        // any pino-style { debug, info, warn, error }(obj, msg)
