@@ -83,36 +83,55 @@ Each SDK is released from its own tag:
 | Go (planned) | `sdks/go/v<version>` (Go's rule for modules in subdirectories) | — |
 | Python (`gabriel-slack` on PyPI) | `python-v<version>` | `.github/workflows/release-python.yml` |
 
-Node.js release steps:
+### `pnpm release`
 
-1. Bump `version` in `sdks/node/package.json` and add a `## [<version>]` section to `sdks/node/CHANGELOG.md`.
-2. Optional rehearsal: run the **release-node** workflow manually (always a dry run).
-3. Tag and push: `git tag node-v<version> && git push origin node-v<version>`.
-4. The workflow verifies the tag matches the package version, runs every check, publishes to npm with
-   provenance and creates the GitHub release from the changelog section.
+Run it on an up-to-date, clean `main` whose CI run passed:
+
+```bash
+pnpm release --dry-run   # see what would be released; changes nothing
+pnpm release             # same plan, then edit the notes, confirm once, publish
+```
+
+What it does:
+
+1. **Which SDKs.** For each SDK it compares `HEAD` with the SDK's last tag. Only changes under
+   `src/` or the package manifest count; tests, examples and docs alone do not trigger a release.
+   `--only node` / `--only python` restricts (or forces) the selection.
+2. **Which version.** It extracts the public API at the last tag and at `HEAD` (TypeScript
+   declarations for Node, `gabriel.__all__` and everything reachable from it for Python) and diffs
+   them: before 1.0 any API change is a minor bump and no API change is a patch; from 1.0 changed or
+   removed API is major. The plan lists the API differences behind the decision. Override with
+   `--bump [pkg=]patch|minor|major` or `--version pkg=x.y.z`.
+3. **CHANGELOG.** Notes written under `## [Unreleased]` in pull requests are used as they are.
+   Otherwise the script drafts them with the `claude` CLI from the commits, their pull requests and
+   the API diff (or lists commit subjects with `--no-ai` or without the CLI), and opens them in
+   `$VISUAL` / `$EDITOR` for review.
+4. **Publish.** After one confirmation it updates the versions and changelogs, commits
+   `Release node x.y.z, python x.y.z`, creates the tags and pushes `main` and the tags atomically.
+   The tag workflows below publish; the script follows them with `gh run watch` and checks that
+   the versions are live on npm and PyPI.
+
+Writing user-facing notes under `## [Unreleased]` in a feature PR is welcome but optional.
+
+### What the tags trigger
+
+`release-node.yml` / `release-python.yml` verify that the tag matches the package version, run every
+check, publish and create the GitHub release from the changelog section. Each workflow can also be
+run manually as a rehearsal (Node: `npm publish --dry-run`; Python: build and check, no upload).
+Without the script, the same release is: bump the version (`sdks/node/package.json`, or
+`uv version <version>` in `sdks/python`), add the `## [<version>]` changelog section, commit, then
+`git tag node-v<version>` / `python-v<version>` and push the tag.
 
 Packages are only published from GitHub Actions. `publishConfig.provenance` makes a local `npm publish`
 fail on purpose, so a developer machine's npm credentials can never publish the package.
 
-**Authentication:** npm trusted publishing (OIDC) bound to this repository, the `release-node.yml`
-workflow and the `npm` environment. No npm token is stored anywhere, and the environment is only
-reachable from `node-v*` tag runs.
+**Authentication:** npm and PyPI trusted publishing (OIDC), bound to this repository, the
+`release-node.yml` / `release-python.yml` workflows and the `npm` / `pypi` environments, which are only
+reachable from tag runs. No npm or PyPI token is stored anywhere.
 
 **After publishing:** npm runs an automated review on every new version. Until it finishes, the version
 shows as "Validating" on npmjs.com, cannot be installed yet, and `latest` keeps pointing at the previous
 version. This normally clears on its own; nothing needs to be re-run.
-
-Python release steps:
-
-1. Bump `version` in `sdks/python/pyproject.toml` (`uv version <version>` from `sdks/python`) and add a
-   `## [<version>]` section to `sdks/python/CHANGELOG.md`.
-2. Optional rehearsal: run the **release-python** workflow manually (builds and checks, never uploads).
-3. Tag and push: `git tag python-v<version> && git push origin python-v<version>`.
-4. The workflow verifies the tag matches the package version, runs every check, publishes to PyPI with
-   attestations and creates the GitHub release from the changelog section.
-
-**Authentication:** PyPI trusted publishing (OIDC) bound to this repository, the `release-python.yml`
-workflow and the `pypi` environment. No PyPI token is stored anywhere.
 
 ## Reporting security issues
 

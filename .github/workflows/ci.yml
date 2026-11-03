@@ -31,6 +31,7 @@ jobs:
         run: npm pack --dry-run
       - run: pnpm spec:check
       - run: pnpm oss:check
+      - run: pnpm test:scripts
 
   python:
     runs-on: ubuntu-latest
