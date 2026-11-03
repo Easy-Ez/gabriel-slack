@@ -13,7 +13,7 @@ Gabriel 使用与 Slack 网页端相同的会话凭证（`d` 会话 Cookie，由
 
 | 语言 | 包 | 状态 |
 | :--- | :--- | :--- |
-| TypeScript / Node.js | [`gabriel-slack`](./sdks/node) | **预览版 (0.2)**，参考实现 |
+| TypeScript / Node.js | [`gabriel-slack`](./sdks/node) | **预览版 (0.1)**，参考实现 |
 | Go | [`sdks/go`](./sdks/go) | 规划中 |
 | Python | [`gabriel-slack`](./sdks/python)（import `gabriel`） | **预览版 (0.1)**，asyncio，除应用内登录 API（`signInWithBrowser()`）外与参考实现功能对齐 |
 

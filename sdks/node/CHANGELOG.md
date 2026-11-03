@@ -6,8 +6,6 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-11-03
-
 ### Added
 - `signInWithBrowser()`: signs in through a dedicated Chrome / Chromium window with a temporary
   profile and returns the session cookie plus the signed-in workspaces, for apps that store the
