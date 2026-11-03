@@ -144,6 +144,10 @@ A session acts as the signed-in person, so an automation reading its own replies
   limit they fail with `LOOP_DETECTED` and `guard.loop_detected` fires.
 * **Unread cursor.** Posting marks a channel as read for the person. `preserveUnreadCursor`
   restores the previous position afterwards, unless the person read the channel meanwhile.
+* **Attribution.** An optional line above each message (`:robot_face: Paimon (Assistant) ·
+  confirmed by @Me`) tells readers an agent wrote it. It is a tagged context block written on
+  every post, edit and stream refresh, and parsed back out of received messages. It is
+  self-declared, so it informs people but proves nothing.
 
 ## 7. Subscriptions
 

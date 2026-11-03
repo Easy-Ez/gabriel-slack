@@ -270,6 +270,40 @@ const agent = client.scope({
 
 同一（频道，线程）在 60 秒内由处理器自动发出的消息超过 `loopGuard.maxAutoRepliesPerMinute`（默认 5）条时，后续写入抛出 `LOOP_DETECTED` 并派发 `guard.loop_detected`，防止多个 Agent 互相回复陷入死循环。
 
+### 7.4 代发标注
+
+会话身份发出的消息和本人手打的一模一样。开启 `attribution` 后，每条消息正文上方会多一行小字，说明是 Agent 代发的（默认关闭）：
+
+```typescript
+const client = GabrielClient.fromCookie({ cookieD, attribution: { name: "Paimon", role: "Assistant" } });
+
+await client.chat.send({ channel, markdown: "已部署。" });                          // 默认：未经本人确认
+await ctx.reply({ markdown: "感谢~", attribution: { review: "confirmed" } });      // 本人确认过这一条
+await client.chat.send({ channel, markdown: "我自己发的", attribution: false });    // 这条不加
+```
+
+预设的每个参数对应这一行里的一段（`@我` 是当前登录的账号）：
+
+```text
+:robot_face:  Paimon  (Assistant)  ·  confirmed by @我
+└── icon ──┘  └name┘  └─ role ──┘     └─── review ───┘
+```
+
+| `review` | 最终显示 |
+| :--- | :--- |
+| `"unconfirmed"`（默认） | :robot_face: Paimon (Assistant) · sent for @我 · not reviewed |
+| `"confirmed"` | :robot_face: Paimon (Assistant) · confirmed by @我 |
+| `"hidden"` | :robot_face: Paimon (Assistant) |
+
+* `icon` 默认 `":robot_face:"`，传 `null` 不显示。
+* `"confirmed"` 只能逐条传，不能设为客户端默认值：SDK 无从知道是否真有人审过，必须由调用方逐条声明。
+* 想用自己的文案就传 `text`（mrkdwn，`{self}` 会替换成当前账号的 @；也可以传函数，参数是 `{ selfUserId, channel, threadTs, review }`）：`attribution: { text: ":sparkles: 由 *Paimon* 起草，{self} 已审阅" }`。
+* 不确定会生成什么，就用 `client.chat.previewAttribution({ review: "confirmed" })` 看最终的文案和 block，不会发送任何请求。
+* 标注里不允许出现 `@channel` / `@here` / `@everyone` 和用户组提及；受限视图（`client.scope()`）拒绝逐条覆盖，LLM 工具无法自称"已确认"，也无法去掉标注。
+* 拆分后的每条消息、`chat.update`、流式输出的每次刷新都会带上这一行。
+
+收到的消息如果带这一行，会解析成 `evt.attribution`（`{ text, review? }`，`message.updated`、线程和历史消息同样有），并且不计入 `markdown` 正文。任何客户端都能写出同样的 block，所以它只是展示提示，不能当作身份证明。
+
 ## 8. 可靠性：顺序、断线补齐与停机
 
 * **顺序**：实名解析并行进行，但同频道事件严格按到达顺序派发。

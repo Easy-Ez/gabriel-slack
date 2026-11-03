@@ -19,6 +19,8 @@ from typing import Any, ClassVar, Literal, TypeVar
 
 MessageOrigin = Literal["this_client", "self_other_client", "other_user", "bot"]
 Presence = Literal["active", "away"]
+#: How an agent attribution line ends (spec/behavior.md §9.1).
+AttributionReview = Literal["confirmed", "unconfirmed", "hidden"]
 
 _NULLABLE = {"nullable": True}
 
@@ -100,6 +102,16 @@ class Mention(_Serializable):
     kind: Literal["user", "usergroup", "broadcast", "keyword"]
     id: str
     name: str | None = None
+
+
+@dataclass(kw_only=True, slots=True)
+class MessageAttribution(_Serializable):
+    """Self-declared agent attribution line found on a received message (spec §9.1). Unverified."""
+
+    #: The line rendered to Markdown.
+    text: str
+    #: Present when the line was written by a preset.
+    review: AttributionReview | None = None
 
 
 @dataclass(kw_only=True, slots=True)
@@ -203,6 +215,8 @@ class MessageCreatedEvent(BaseEvent):
     thread_ts: str | None = None
     #: Raw message subtype (``file_share``, ``thread_broadcast``, ``bot_message``, …) if any.
     subtype: str | None = None
+    #: Self-declared agent attribution line, removed from ``markdown`` (spec §9.1). Unverified.
+    attribution: MessageAttribution | None = None
 
     def to_llm_context(self) -> str:
         """Untrusted-content-delimited LLM context (see :func:`gabriel.to_llm_context`)."""
@@ -223,6 +237,8 @@ class MessageUpdatedEvent(BaseEvent):
     raw: Any = None
     previous_markdown: str | None = None
     thread_ts: str | None = None
+    #: Attribution line of the current content (spec §9.1). Unverified.
+    attribution: MessageAttribution | None = None
 
 
 @dataclass(kw_only=True, slots=True)
@@ -569,6 +585,7 @@ __all__ = [
     "AiStreamCompletedEvent",
     "AiStreamEvent",
     "AiStreamUpdatedEvent",
+    "AttributionReview",
     "AuthDeadEvent",
     "AuthRefreshedEvent",
     "BadgeCounts",
@@ -589,6 +606,7 @@ __all__ = [
     "LeaseExpiredEvent",
     "LoopDetectedEvent",
     "Mention",
+    "MessageAttribution",
     "MessageCreatedEvent",
     "MessageDeletedEvent",
     "MessageOrigin",

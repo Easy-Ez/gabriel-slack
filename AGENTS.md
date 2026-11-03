@@ -45,6 +45,8 @@ pnpm typecheck
 pnpm build
 pnpm spec:check    # TypeScript events ⇔ JSON Schema ⇔ fixtures
 pnpm oss:check     # no secrets, real IDs, internal markers or unlisted docs in tracked files
+pnpm test:scripts  # tests of the release script
+pnpm release --dry-run   # what `pnpm release` would publish (see CONTRIBUTING.md › Releasing)
 ```
 
 Python SDK (from `sdks/python`, uses `uv`; harness: `tests/harness.py`):

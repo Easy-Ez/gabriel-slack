@@ -16,6 +16,7 @@ from ..util.logger import Logger
 from .context import current_trigger
 
 if TYPE_CHECKING:
+    from ..markdown.attribution import AttributionOverride
     from .apis import (
         ChannelsApi,
         FileInfo,
@@ -86,6 +87,13 @@ class _Target:
 _FILE_ID = re.compile(r"^F[A-Z0-9]+$")
 
 
+def _with_attribution(params: dict[str, Any], attribution: Any) -> dict[str, Any]:
+    """Records an attribution override in the write params so ``_check_write`` can deny it."""
+    if attribution is not None:
+        params["attribution"] = attribution
+    return params
+
+
 class _SuffixedStream:
     """Stream wrapper that appends the disclosure suffix on ``finish()``."""
 
@@ -144,8 +152,12 @@ class _ScopedChat:
         priority: Literal["interactive", "normal"] = "normal",
         preserve_unread_cursor: bool = False,
         auto_chunk: bool = True,
+        attribution: AttributionOverride | None = None,
     ) -> SendResult:
-        params = {"channel": channel, "markdown": markdown, "blocks": blocks, "thread_ts": thread_ts}
+        """Always uses the client's default attribution; an ``attribution`` override is denied."""
+        params = _with_attribution(
+            {"channel": channel, "markdown": markdown, "blocks": blocks, "thread_ts": thread_ts}, attribution
+        )
         await self._scope._check_write("chat.send", _Target(channel=channel, thread_ts=thread_ts), params)
         return await self._chat.send(
             channel,
@@ -159,9 +171,15 @@ class _ScopedChat:
         )
 
     async def update(
-        self, channel: str, ts: str, markdown: str | None = None, *, blocks: list[Any] | None = None
+        self,
+        channel: str,
+        ts: str,
+        markdown: str | None = None,
+        *,
+        blocks: list[Any] | None = None,
+        attribution: AttributionOverride | None = None,
     ) -> UpdateResult:
-        params = {"channel": channel, "ts": ts, "markdown": markdown, "blocks": blocks}
+        params = _with_attribution({"channel": channel, "ts": ts, "markdown": markdown, "blocks": blocks}, attribution)
         await self._scope._check_write("chat.update", _Target(channel=channel, ts=ts), params)
         return await self._chat.update(channel, ts, self._scope._with_suffix(markdown), blocks=blocks)
 
@@ -176,8 +194,11 @@ class _ScopedChat:
         thread_ts: str | None = None,
         initial_markdown: str | None = None,
         preserve_unread_cursor: bool = False,
+        attribution: AttributionOverride | None = None,
     ) -> StreamController:
-        params = {"channel": channel, "thread_ts": thread_ts, "initial_markdown": initial_markdown}
+        params = _with_attribution(
+            {"channel": channel, "thread_ts": thread_ts, "initial_markdown": initial_markdown}, attribution
+        )
         await self._scope._check_write("chat.create_stream", _Target(channel=channel, thread_ts=thread_ts), params)
         stream = await self._chat.create_stream(
             channel,
@@ -512,6 +533,9 @@ class ScopedClient:
         w = self._policy.write
         if w is not None and w.allowed_actions is not None and action not in w.allowed_actions:
             raise self._deny(action, "action is not in write.allowed_actions")
+        # A scoped caller (an LLM tool) must not claim `review: "confirmed"` or drop the line.
+        if action.startswith("chat.") and params.get("attribution") is not None:
+            raise self._deny(action, "attribution overrides are not allowed; the client's default attribution applies")
         if w is not None and w.target_scope == "trigger_thread_only":
             trigger = current_trigger()
             if trigger is None or not trigger.channel:

@@ -1,0 +1,98 @@
+{
+  "description": "Leading gabriel.attribution block becomes `attribution` and is left out of markdown and mentions",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "Thanks, see you there.",
+    "ts": "1800000003.000100",
+    "client_msg_id": "33333333-3333-4333-8333-333333333333",
+    "blocks": [
+      {
+        "type": "context",
+        "block_id": "gabriel.attribution.confirmed",
+        "elements": [
+          {
+            "type": "mrkdwn",
+            "text": ":robot_face: Paimon (Assistant) · confirmed by <@U0ALICE0001>"
+          }
+        ]
+      },
+      {
+        "type": "rich_text",
+        "block_id": "b0001",
+        "elements": [
+          {
+            "type": "rich_text_section",
+            "elements": [
+              {
+                "type": "text",
+                "text": "Thanks "
+              },
+              {
+                "type": "user",
+                "user_id": "U0SELF00001"
+              },
+              {
+                "type": "text",
+                "text": ", see you there."
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "type": "message.created",
+    "eventId": "C0GENERAL01:1800000003.000100:created",
+    "ts": "1800000003.000100",
+    "clientMsgId": "33333333-3333-4333-8333-333333333333",
+    "delivery": "realtime",
+    "origin": "other_user",
+    "text": "Thanks, see you there.",
+    "markdown": "Thanks @Me, see you there.",
+    "sender": {
+      "id": "U0ALICE0001",
+      "isBot": false,
+      "displayName": "Alice"
+    },
+    "channel": {
+      "id": "C0GENERAL01",
+      "name": "general"
+    },
+    "thread": null,
+    "isThreadReply": false,
+    "mentions": [
+      {
+        "kind": "user",
+        "id": "U0SELF00001",
+        "name": "Me"
+      }
+    ],
+    "isMentioningMe": true,
+    "files": [],
+    "attribution": {
+      "text": ":robot_face: Paimon (Assistant) · confirmed by @Alice",
+      "review": "confirmed"
+    }
+  }
+}

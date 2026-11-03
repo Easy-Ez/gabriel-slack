@@ -2,7 +2,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import type { GabrielCore } from "../core/core.js";
 import { GabrielError } from "../errors.js";
-import { renderMessageMarkdown, toFileRefs } from "../events/normalize.js";
+import { attributionUserIds, renderMessageMarkdown, toFileRefs } from "../events/normalize.js";
+import { parseAttribution, type MessageAttribution } from "../markdown/attribution.js";
 import type { ChannelRef, DndInfo, FileRef, UserRef } from "../events/types.js";
 import { toUserRecord, type Hydrator, type UserRecord } from "./hydrator.js";
 import { assertChannelId, assertFileId, assertNonEmptyString, assertTs, assertUserId, isTs, normalizeEmoji } from "../util/validate.js";
@@ -46,15 +47,28 @@ async function senderOf(h: Hydrator, msg: Obj): Promise<UserRef> {
 }
 
 /** Loads every user / channel referenced by a list of messages, then renders Markdown. */
-async function renderMessages(h: Hydrator, messages: Obj[]): Promise<Array<{ msg: Obj; sender: UserRef; markdown: string; files: FileRef[] }>> {
+async function renderMessages(
+  h: Hydrator,
+  messages: Obj[],
+): Promise<Array<{ msg: Obj; sender: UserRef; markdown: string; files: FileRef[]; attribution?: MessageAttribution }>> {
   const ids = new Set<string>();
   for (const m of messages) {
     if (s(m.user)) ids.add(s(m.user)!);
     for (const mm of (s(m.text) ?? "").matchAll(/<@([UW][A-Z0-9]+)/g)) ids.add(mm[1]!);
+    for (const id of attributionUserIds(m)) ids.add(id);
   }
   await Promise.allSettled([...ids].map((id) => h.users.load(id)));
   return Promise.all(
-    messages.map(async (msg) => ({ msg, sender: await senderOf(h, msg), markdown: renderMessageMarkdown(msg, h.resolver), files: toFileRefs(msg.files) })),
+    messages.map(async (msg) => {
+      const attribution = parseAttribution(msg.blocks, h.resolver);
+      return {
+        msg,
+        sender: await senderOf(h, msg),
+        markdown: renderMessageMarkdown(msg, h.resolver),
+        files: toFileRefs(msg.files),
+        ...(attribution ? { attribution } : {}),
+      };
+    }),
   );
 }
 
@@ -65,6 +79,8 @@ export interface ThreadMessage {
   ts: string;
   sender: UserRef;
   markdown: string;
+  /** Self-declared agent attribution line, removed from `markdown` (spec §9.1). Unverified. */
+  attribution?: MessageAttribution;
   files: FileRef[];
   isDeleted: boolean;
 }
@@ -91,7 +107,8 @@ export function formatTranscript(channel: ChannelRef, rootTs: string, messages: 
     const handle = m.sender.handle ? ` (@${m.sender.handle})` : "";
     const body = m.isDeleted ? "_(message deleted)_" : m.markdown || (m.files.length ? "" : "_(empty)_");
     const files = m.files.length ? `\n  [files: ${m.files.map((f) => f.name).join(", ")}]` : "";
-    lines.push(`[${formatTime(m.ts)}] ${who}${handle}:`);
+    const via = m.attribution ? ` [attribution: ${m.attribution.text.replace(/\s+/g, " ")}]` : "";
+    lines.push(`[${formatTime(m.ts)}] ${who}${handle}${via}:`);
     lines.push(...body.split("\n").map((l) => `  ${l}`));
     if (files) lines.push(files);
     lines.push("");
@@ -140,10 +157,11 @@ export class ThreadsApi {
     const rootTs = (first && (s(first.thread_ts) ?? s(first.ts))) ?? ts;
     for (const m of raw) if (s(m.ts)) this.h.recordThreadRoot(s(m.ts)!, s(m.thread_ts) ?? null);
     const rendered = await renderMessages(this.h, raw);
-    const messages: ThreadMessage[] = rendered.map(({ msg, sender, markdown, files }) => ({
+    const messages: ThreadMessage[] = rendered.map(({ msg, sender, markdown, files, attribution }) => ({
       ts: s(msg.ts) ?? "",
       sender,
       markdown,
+      ...(attribution ? { attribution } : {}),
       files,
       isDeleted: msg.subtype === "tombstone" || msg.is_deleted === true,
     }));
@@ -164,7 +182,14 @@ export class ThreadsApi {
     do {
       const res = await this.page(channel, ts, pageSize, cursor, opts.oldest);
       for (const r of await renderMessages(this.h, res.messages ?? [])) {
-        yield { ts: s(r.msg.ts) ?? "", sender: r.sender, markdown: r.markdown, files: r.files, isDeleted: r.msg.subtype === "tombstone" };
+        yield {
+          ts: s(r.msg.ts) ?? "",
+          sender: r.sender,
+          markdown: r.markdown,
+          ...(r.attribution ? { attribution: r.attribution } : {}),
+          files: r.files,
+          isDeleted: r.msg.subtype === "tombstone",
+        };
       }
       cursor = res.has_more ? s(res.response_metadata?.next_cursor) : undefined;
     } while (cursor);
@@ -629,6 +654,8 @@ export interface HistoryMessage {
   ts: string;
   sender: UserRef;
   markdown: string;
+  /** Self-declared agent attribution line, removed from `markdown` (spec §9.1). Unverified. */
+  attribution?: MessageAttribution;
   files: FileRef[];
   thread: { rootTs: string; replyCount: number; latestReplyTs?: string } | null;
 }
@@ -664,7 +691,7 @@ export class ChannelsApi {
   }> {
     const res = await this.rawHistory(opts);
     const rendered = await renderMessages(this.h, res.messages);
-    const messages = rendered.map(({ msg, sender, markdown, files }) => toHistoryMessage(msg, sender, markdown, files));
+    const messages = rendered.map(({ msg, sender, markdown, files, attribution }) => toHistoryMessage(msg, sender, markdown, files, attribution));
     return { messages, hasMore: res.hasMore, ...(res.nextCursor ? { nextCursor: res.nextCursor } : {}) };
   }
 
@@ -715,13 +742,13 @@ export class ChannelsApi {
         latest = first && isTs(first.ts) ? first.ts : undefined;
         if (latest) cursor = page.nextCursor;
       } else cursor = page.nextCursor;
-      for (const r of await renderMessages(this.h, page.messages)) yield toHistoryMessage(r.msg, r.sender, r.markdown, r.files);
+      for (const r of await renderMessages(this.h, page.messages)) yield toHistoryMessage(r.msg, r.sender, r.markdown, r.files, r.attribution);
       if (!page.hasMore) return;
     } while (cursor);
   }
 }
 
-function toHistoryMessage(msg: Obj, sender: UserRef, markdown: string, files: FileRef[]): HistoryMessage {
+function toHistoryMessage(msg: Obj, sender: UserRef, markdown: string, files: FileRef[], attribution?: MessageAttribution): HistoryMessage {
   const replyCount = typeof msg.reply_count === "number" ? msg.reply_count : 0;
   const threadTs = s(msg.thread_ts);
   const latest = s(msg.latest_reply);
@@ -729,6 +756,7 @@ function toHistoryMessage(msg: Obj, sender: UserRef, markdown: string, files: Fi
     ts: s(msg.ts) ?? "",
     sender,
     markdown,
+    ...(attribution ? { attribution } : {}),
     files,
     thread: threadTs ? { rootTs: threadTs, replyCount, ...(latest ? { latestReplyTs: latest } : {}) } : null,
   };

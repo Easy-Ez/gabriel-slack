@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { GabrielError } from "../errors.js";
 import type { GabrielEvent, MessageCreatedEvent } from "../events/types.js";
+import type { AttributionOverride } from "../markdown/attribution.js";
 import { compareTs } from "../util/validate.js";
 import type { SendOptions, SendResult } from "./chat.js";
 import type { StreamController } from "./stream.js";
@@ -35,6 +36,8 @@ export interface ReplyOptions {
   inThread?: boolean;
   broadcast?: boolean;
   preserveUnreadCursor?: boolean;
+  /** Overrides the client's `attribution` (`{ review: "confirmed" }`, or `false` = none). */
+  attribution?: AttributionOverride;
 }
 
 export interface WaitForReplyOptions {
@@ -53,7 +56,7 @@ export interface EventContext {
    */
   readonly signal: AbortSignal;
   reply(markdownOrOpts: string | ReplyOptions): Promise<SendResult>;
-  replyStream(opts?: { initialMarkdown?: string; preserveUnreadCursor?: boolean }): Promise<StreamController>;
+  replyStream(opts?: { initialMarkdown?: string; preserveUnreadCursor?: boolean; attribution?: AttributionOverride }): Promise<StreamController>;
   react(emoji: string): Promise<void>;
   waitForReply(filter: MessageMatcher | ((evt: MessageCreatedEvent) => boolean), opts: WaitForReplyOptions): Promise<MessageCreatedEvent | null>;
   hydrateRemaining(): Promise<void>;
