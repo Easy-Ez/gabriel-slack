@@ -1,10 +1,11 @@
 #!/usr/bin/env node
+import path from "node:path";
 import { createInterface } from "node:readline";
 import { exchangeCookie } from "../core/auth.js";
 import { DEFAULT_CLIENT_METADATA, DEFAULT_ENDPOINTS } from "../core/metadata.js";
+import { signInWithBrowser } from "../core/sign-in.js";
 import { GabrielError } from "../errors.js";
 import { redactSecret } from "../util/redact.js";
-import { browserLogin } from "./browser-login.js";
 import { extractFromDebugChrome } from "./browser-extract.js";
 import { deleteSession, loadSessionCookie, parseCurlForCookie, saveSession, sessionFile } from "./session-store.js";
 
@@ -91,7 +92,14 @@ export async function main(argv: string[]): Promise<number> {
     }
     case "login": {
       const domain = rest.find((a) => !a.startsWith("--"));
-      const cookieD = await browserLogin(domain);
+      const chromePath = process.env.GABRIEL_CHROME_PATH;
+      const { cookieD } = await signInWithBrowser({
+        ...(domain ? { workspace: domain } : {}),
+        ...(chromePath ? { browserPath: path.resolve(chromePath) } : {}),
+        onStatus: (status) => {
+          if (status === "opening") process.stderr.write("Opening a sign-in window — complete the Slack sign-in there; it closes automatically.\n");
+        },
+      });
       await describeSession(cookieD);
       const file = saveSession({ cookieD, ...(domain ? { workspace: domain } : {}) });
       process.stdout.write(`Saved to ${file} (mode 0600).\n`);

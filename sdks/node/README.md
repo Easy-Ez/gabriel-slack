@@ -39,10 +39,52 @@ when the cookie itself expires.
 * For local development, `gabriel auth parse-curl --save` stores it in
   `~/.config/gabriel/auth.json` (mode 0600); `loadSessionCookie()` reads the environment first,
   then that file.
+* Desktop apps sign the person in with `signInWithBrowser()` and keep the cookie in the OS
+  keychain themselves (see [Signing in from an app](#signing-in-from-an-app)).
 * Use `allowedTeams` to refuse connecting to any other workspace.
 * For long-running team bots, use a dedicated service account session and alert on `auth.dead`.
 
-The SDK never logs, emits or returns tokens or cookies.
+The SDK never logs or emits tokens or cookies, and never returns tokens.
+
+### Signing in from an app
+
+`signInWithBrowser()` opens a dedicated Chrome / Chromium window with a fresh temporary profile on
+the workspace sign-in page. The person signs in there (SSO included); as soon as the session cookie
+works, the window closes and the cookie is returned together with the signed-in workspaces. Nothing
+is written to `auth.json` and nothing is printed: progress arrives through `onStatus` only. The
+temporary profile is deleted whether the sign-in succeeds, fails or is aborted.
+
+```typescript
+import { GabrielError, listWorkspaces, signInWithBrowser } from "gabriel-slack";
+
+const ctrl = new AbortController(); // e.g. wired to a "Cancel" button
+try {
+  const { cookieD, workspaces } = await signInWithBrowser({
+    workspace: "your-workspace",      // optional: open this workspace's sign-in page
+    timeoutMs: 300_000,               // default
+    signal: ctrl.signal,              // abort closes the window
+    onStatus: (status) => ui.show(status), // "opening" | "waiting" | "verifying" | "done"
+  });
+  await keychain.set(`slack.${workspaces[0]!.teamId}.cookie`, cookieD); // your secure storage
+} catch (err) {
+  if (err instanceof GabrielError && err.code === "BROWSER_NOT_FOUND") ui.askForChrome();
+  else throw err;
+}
+
+// Later: check a stored cookie and list its workspaces (no tokens are returned).
+const stored = await keychain.get("slack.t0123456789.cookie");
+const workspaces = await listWorkspaces(stored); // AUTH_DEAD once the cookie is signed out
+```
+
+| Error code | When |
+| :--- | :--- |
+| `BROWSER_NOT_FOUND` | No Chrome / Chromium in the usual locations, `browserPath` does not exist, or it cannot be started. |
+| `SIGN_IN_TIMEOUT` | No completed sign-in within `timeoutMs`. |
+| `CANCELLED` | `signal` aborted, or the person closed the sign-in window. |
+| `AUTH_DEAD` | The person signed in, but Slack keeps rejecting the session cookie. |
+
+`browserPath` takes an absolute path to a Chrome-compatible executable when it is not installed in
+a standard location.
 
 ## Quick start
 
@@ -262,7 +304,8 @@ try {
 ```
 
 Codes: see [`spec/behavior.md` §12](https://github.com/Easy-Ez/gabriel-slack/blob/main/spec/behavior.md#12-errors). This implementation adds
-`LOOP_DETECTED`, `INVALID_ARGUMENT`, `INVALID_STATE` and `SLACK_API_ERROR`.
+`LOOP_DETECTED`, `INVALID_ARGUMENT`, `INVALID_STATE`, `SLACK_API_ERROR`, and `BROWSER_NOT_FOUND` /
+`SIGN_IN_TIMEOUT` for [`signInWithBrowser()`](#signing-in-from-an-app).
 
 ## Low-level core
 
@@ -311,6 +354,9 @@ npx gabriel auth status                        # verify and list workspaces (sec
 npx gabriel auth logout --yes
 ```
 
+`auth login` uses [`signInWithBrowser()`](#signing-in-from-an-app); set `GABRIEL_CHROME_PATH` when
+Chrome / Chromium is not installed in a standard location.
+
 ## Implementation status
 
 | Area | Status |
@@ -323,7 +369,7 @@ npx gabriel auth logout --yes
 | Gap recovery (cold + fast-reconnect reconcile), `MemoryStateStore`, `FileStateStore` | ✅ |
 | `RedisStateStore`, multi-replica leases (`guard.lease_expired`) | ⏳ planned |
 | `gabriel-daemon` / `DaemonTransport` | ⏳ planned |
-| `gabriel auth login` (dedicated Chrome window, system Chrome via CDP) | ✅ |
+| `gabriel auth login` / `signInWithBrowser()` (dedicated Chrome window, system Chrome via CDP), `listWorkspaces()` | ✅ |
 | `gabriel auth extract` (read from a Chrome started with a debug port) | ✅ |
 | OpenTelemetry spans (metrics hook available today) | ⏳ planned |
 

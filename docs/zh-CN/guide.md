@@ -53,7 +53,19 @@ pbpaste | npx gabriel auth parse-curl --save   # 从浏览器里 "Copy as cURL" 
 npx gabriel auth status                    # 验证并列出已登录的工作区
 ```
 
+Chrome 不在常见安装位置时，用环境变量 `GABRIEL_CHROME_PATH` 指定可执行文件路径。
+
 代码里用 `loadSessionCookie()` 读取：优先取环境变量 `GABRIEL_COOKIE_D`，其次取上面保存的文件。生产环境请从密钥管理系统注入环境变量，**不要硬编码**。长期运行的团队机器人建议使用独立的服务账号会话，并对 `auth.dead` 设置告警。
+
+桌面应用可以直接调用 `signInWithBrowser()`：它打开同样的独立 Chrome 窗口（临时 profile），用户登录完成后返回 `{ cookieD, workspaces }`，不写 `auth.json`、不向终端输出任何内容，进度只通过 `onStatus` 回调（`opening` / `waiting` / `verifying` / `done`）通知；Cookie 由应用自己存进系统钥匙串。之后用 `listWorkspaces(cookieD)` 检查 Cookie 是否仍有效并列出工作区（不返回令牌）。
+
+```typescript
+import { listWorkspaces, signInWithBrowser } from "gabriel-slack";
+
+const { cookieD, workspaces } = await signInWithBrowser({ workspace: "your-workspace", signal, onStatus: showStatus });
+await keychain.set(`slack.${workspaces[0]!.teamId}.cookie`, cookieD); // 应用自己的安全存储
+const stillValid = await listWorkspaces(cookieD); // Cookie 失效时抛 AUTH_DEAD
+```
 
 ## 3. 五分钟上手
 
@@ -312,6 +324,7 @@ await client.chat.send({ channel, markdown: "我自己发的", attribution: fals
 | :--- | :--- | :--- |
 | `RATE_LIMITED` / `NETWORK_TIMEOUT` / `SOCKET_CLOSED` / `SERVER_ERROR` | 限流、超时、断线、服务端错误（已自动重试） | 通常无需处理 |
 | `AUTH_DEAD` | Cookie 失效 | 告警，重新 `gabriel auth login` |
+| `BROWSER_NOT_FOUND` / `SIGN_IN_TIMEOUT` | `signInWithBrowser()` 找不到 Chrome / 等待登录超时 | 安装 Chrome 或传 `browserPath` / 让用户重试 |
 | `NOT_IN_CHANNEL` / `CHANNEL_NOT_FOUND` / `PERMISSION_DENIED` | 频道不存在、未加入或无权限 | 检查频道 |
 | `MSG_TOO_LONG` / `MSG_BLOCKS_TOO_LONG` | 关闭了自动拆分且内容超长 | 拆分内容或开启 `autoChunk` |
 | `SUBSCRIPTION_CAP_EXCEEDED` | 关注人数超过上限 | 缩小关注范围 |
@@ -319,7 +332,7 @@ await client.chat.send({ channel, markdown: "我自己发的", attribution: fals
 | `LOOP_DETECTED` | 自动回复熔断 | 检查是否有 Agent 互聊 |
 | `FILE_TOO_LARGE` | 下载超过 `maxBytes` | 跳过附件或提示用户 |
 | `HANDLER_TIMEOUT` | 处理器超时（经 `onError` 收到） | 把 `ctx.signal` 传给耗时调用，或调大时限 |
-| `CANCELLED` / `STREAM_CLOSED` | 已取消 / 流已结束后继续写 | 正常控制流 / 修正调用顺序 |
+| `CANCELLED` / `STREAM_CLOSED` | 已取消（包括用户关闭了 `signInWithBrowser()` 的登录窗口）/ 流已结束后继续写 | 正常控制流 / 修正调用顺序 |
 | `INVALID_ARGUMENT` / `INVALID_STATE` | 参数或状态不对（例如浏览器标识过旧） | 按提示修正 |
 | `SLACK_API_ERROR` | 未专门映射的 Slack 错误 | 查看 `rawSlackError` |
 
@@ -476,3 +489,5 @@ client.on("connection.gap", (e) => { if (!e.recovered) warn("消息补拉不完�
 | 同一线程里 AI 突然不回复 | 触发了自动回复熔断 | 检查 Agent 互聊，必要时调整 `maxAutoRepliesPerMinute` |
 | 启动报 `INVALID_STATE`，提示浏览器标识过旧 | Slack 拒绝了当前 User-Agent | 设置 `advanced.metadata.userAgent` 为新版 Chrome 的 UA |
 | 收到 `guard.protocol_drift` | Slack 有了新的帧类型 | 可先用 `client.core.onEvent()` 处理，并反馈给维护者 |
+| 登录报 `BROWSER_NOT_FOUND` | 常见位置没有 Chrome / Chromium | 安装 Chrome，或传 `browserPath`（CLI 用环境变量 `GABRIEL_CHROME_PATH`） |
+| 登录完成后报 `AUTH_DEAD` | 登录窗口里拿到的 Cookie 持续被 Slack 拒绝 | 重新登录；仍失败时检查工作区是否限制了网页端登录 |
