@@ -19,7 +19,13 @@ Gabriel 使用与 Slack 网页端相同的会话凭证（`d` 会话 Cookie，由
 
 所有语言的 SDK 都实现 [`spec/`](./spec) 中同一份语言无关的契约：行为规范、全量事件 JSON Schema 和共享的一致性测试夹具。
 
-## 快速上手（Node.js ≥ 20.10）
+## 快速上手
+
+### Node.js（≥ 20.10）
+
+```bash
+npm install gabriel-slack
+```
 
 ```typescript
 import { GabrielClient } from "gabriel-slack";
@@ -40,7 +46,55 @@ client.onMessage({ mentionsMe: true }, async (evt, ctx) => {
 await client.start();
 ```
 
-完整说明见 [Node.js SDK 文档](./sdks/node/README.md)；Python 用法见 [Python SDK 文档](./sdks/python/README.md)。本地开发：`pnpm install && pnpm test`；贡献规范见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+### Python（≥ 3.11）
+
+```bash
+pip install gabriel-slack      # 或：uv add gabriel-slack
+```
+
+```python
+import asyncio
+import os
+
+from gabriel import GabrielClient
+
+
+async def main() -> None:
+    client = GabrielClient.from_cookie(
+        cookie_d=os.environ["GABRIEL_COOKIE_D"],  # 从密钥管理系统注入，切勿硬编码
+        workspace="your-workspace",
+    )
+
+    @client.on_message(mentions_me=True)
+    async def answer(evt, ctx):
+        stream = await ctx.reply_stream(initial_markdown="_思考中…_")
+        async for chunk in your_llm.stream(evt.to_llm_context(), signal=stream.signal):
+            stream.append(chunk)
+        await stream.finish()
+
+    async with client:
+        await asyncio.Event().wait()
+
+
+asyncio.run(main())
+```
+
+这几行代码已经包含：令牌派生与刷新、断线重连与缺口补拉、频道内保序、过滤自己消息的回声、自动回复熔断、长消息自动拆分，以及触发消息被删除时自动取消。
+
+完整 API 文档：
+
+* [Node.js SDK 文档](./sdks/node/README.md)：事件、handler 上下文、动作、`scope()`、可靠性、CLI。
+* [Python SDK 文档](./sdks/python/README.md)：同样的能力，Python 风格（snake_case、`async with`、装饰器注册、时长以秒为单位）。
+* [行为规范](./spec/behavior.md) 与 [架构概览](./docs/architecture.md)。
+
+## 本地开发
+
+```bash
+pnpm install && pnpm test                                   # Node.js
+cd sdks/python && uv sync && uv run pytest                  # Python
+```
+
+贡献规范见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 许可证
 

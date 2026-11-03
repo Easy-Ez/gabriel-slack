@@ -29,7 +29,9 @@ with safe defaults.
 Every SDK implements the same language-neutral contract in [`spec/`](./spec): a behavior
 specification, a JSON Schema for every event, and shared conformance fixtures.
 
-## Quick start (Node.js ≥ 20.10)
+## Quick start
+
+### Node.js (≥ 20.10)
 
 ```bash
 npm install gabriel-slack
@@ -54,10 +56,50 @@ client.onMessage({ mentionsMe: true }, async (evt, ctx) => {
 await client.start();
 ```
 
+### Python (≥ 3.11)
+
+```bash
+pip install gabriel-slack      # or: uv add gabriel-slack
+```
+
+```python
+import asyncio
+import os
+
+from gabriel import GabrielClient
+
+
+async def main() -> None:
+    client = GabrielClient.from_cookie(
+        cookie_d=os.environ["GABRIEL_COOKIE_D"],  # from a secret store, never hard-coded
+        workspace="your-workspace",
+    )
+
+    @client.on_message(mentions_me=True)
+    async def answer(evt, ctx):
+        stream = await ctx.reply_stream(initial_markdown="_thinking…_")
+        async for chunk in your_llm.stream(evt.to_llm_context(), signal=stream.signal):
+            stream.append(chunk)
+        await stream.finish()
+
+    async with client:
+        await asyncio.Event().wait()
+
+
+asyncio.run(main())
+```
+
 With those few lines you already get: token derivation and refresh, reconnects and
 gap backfill, ordering within each channel, suppression of echoes from your own messages,
 an auto-reply circuit breaker, automatic splitting of long messages, and cancellation when
-the triggering message is deleted. See the [Node.js SDK guide](./sdks/node/README.md).
+the triggering message is deleted.
+
+Full API documentation:
+
+* [Node.js SDK guide](./sdks/node/README.md): events, handler context, actions, `scope()`, reliability, CLI.
+* [Python SDK guide](./sdks/python/README.md): the same surface in Python (snake_case, `async with`,
+  decorator handlers, durations in seconds).
+* [Behavior specification](./spec/behavior.md) and [architecture overview](./docs/architecture.md).
 
 ## Highlights
 
@@ -67,7 +109,7 @@ the triggering message is deleted. See the [Node.js SDK guide](./sdks/node/READM
   Markdown are resolved in parallel within a 300 ms budget.
 * **Loop-safe**: every event carries an `origin` (`this_client`, `self_other_client`,
   `other_user`, `bot`); echoes of this client's writes are dropped by default.
-* **AI-ready**: `toLLMContext()` wraps message content in an untrusted-content envelope;
+* **AI-ready**: `toLLMContext()` / `to_llm_context()` wraps message content in an untrusted-content envelope;
   `client.scope()` gives LLM tools a least-privilege view (channel allow-lists, no search,
   reply only in the triggering thread, approval hooks).
 * **Streaming replies** that work with session tokens: a single request in flight, the latest
@@ -95,6 +137,15 @@ pnpm test          # unit, integration and conformance tests
 pnpm typecheck
 pnpm spec:check    # TypeScript events ⇔ JSON Schema ⇔ fixtures
 pnpm oss:check     # no credentials, real IDs, emails or local paths in any tracked file
+```
+
+Python SDK (from `sdks/python`, uses [uv](https://docs.astral.sh/uv/)):
+
+```bash
+uv sync
+uv run pytest
+uv run mypy
+uv run ruff check src tests examples
 ```
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and the [Code of Conduct](./CODE_OF_CONDUCT.md) for conventions, how to add a language SDK, and the
