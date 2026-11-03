@@ -36,6 +36,7 @@ from .client.stream import StreamController, StreamResult
 from .core.auth import AuthOptions, AuthTeam, CookieExchangeResult, WorkspaceSession
 from .core.core import KNOWN_FRAME_TYPES, GabrielCore, ProtocolDriftInfo
 from .core.metadata import DEFAULT_CLIENT_METADATA, DEFAULT_ENDPOINTS, ClientMetadata, Endpoints
+from .core.sign_in import SignInResult, SignInStatus, WorkspaceInfo, list_workspaces, sign_in_with_browser
 from .core.types import MetricsSink, RawWsFrame, RequestOpts, WebSocketFactory, WebSocketLike
 from .core.ws import WsState
 from .errors import GabrielError, GabrielErrorCode, is_gabriel_error
@@ -131,6 +132,8 @@ __all__ = [
     "SearchPage",
     "SendResult",
     "SessionCookie",
+    "SignInResult",
+    "SignInStatus",
     "StateStore",
     "StreamController",
     "StreamResult",
@@ -140,6 +143,7 @@ __all__ = [
     "UpdateResult",
     "WebSocketFactory",
     "WebSocketLike",
+    "WorkspaceInfo",
     "WorkspaceSession",
     "WritePolicy",
     "WsState",
@@ -151,6 +155,7 @@ __all__ = [
     "heal_open_fence",
     "is_gabriel_error",
     "lane_key_of",
+    "list_workspaces",
     "load_session_cookie",
     "measure_markdown",
     "mrkdwn_to_markdown",
@@ -158,6 +163,7 @@ __all__ = [
     "parse_attribution",
     "redact_secret",
     "render_attribution",
+    "sign_in_with_browser",
     "silent_logger",
     "stdlib_logger",
     "to_llm_context",
