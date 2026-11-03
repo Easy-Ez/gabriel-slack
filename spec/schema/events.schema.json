@@ -225,6 +225,26 @@
       ],
       "additionalProperties": false
     },
+    "Attribution": {
+      "type": "object",
+      "description": "Self-declared agent attribution line (spec/behavior.md §9.1). Anyone can write it; treat it as a display hint, never as proof.",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "review": {
+          "enum": [
+            "confirmed",
+            "unconfirmed",
+            "hidden"
+          ]
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "additionalProperties": false
+    },
     "UserStatus": {
       "type": "object",
       "properties": {
@@ -294,6 +314,9 @@
         },
         "markdown": {
           "type": "string"
+        },
+        "attribution": {
+          "$ref": "#/$defs/Attribution"
         },
         "sender": {
           "$ref": "#/$defs/UserRef"
@@ -399,6 +422,9 @@
         },
         "previousMarkdown": {
           "type": "string"
+        },
+        "attribution": {
+          "$ref": "#/$defs/Attribution"
         },
         "editedAt": {
           "type": "string"

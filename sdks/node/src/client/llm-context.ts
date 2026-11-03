@@ -29,6 +29,7 @@ export function toLLMContext(evt: MessageCreatedEvent): string {
     `    ts: ${evt.ts}`,
   ];
   if (evt.thread) lines.push(`    thread_root_ts: ${evt.thread.rootTs}`);
+  if (evt.attribution) lines.push(`    attribution: ${oneLine(evt.attribution.text)} (self-declared by the sender, unverified)`);
   lines.push(`    mentions_me: ${evt.isMentioningMe}`);
   if (evt.files.length) lines.push(`    files: ${evt.files.map((f) => `${oneLine(f.name)} (${f.mimeType})`).join(", ")}`);
   lines.push(`  </meta>`, `  <content>`);

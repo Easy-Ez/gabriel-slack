@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import type { GabrielCore } from "../core/core.js";
 import { GabrielError } from "../errors.js";
 import { contentHash } from "../events/normalize.js";
-import { chunkMarkdown, DEFAULT_CHUNK_BUDGET, DEFAULT_CHUNK_MIN } from "../markdown/chunker.js";
+import {
+  markdownToPlainText,
+  renderAttribution,
+  resolveAttribution,
+  type AttributionOverride,
+  type DefaultAttribution,
+  type RenderedAttribution,
+} from "../markdown/attribution.js";
+import { chunkMarkdown, DEFAULT_CHUNK_BUDGET, DEFAULT_CHUNK_MIN, measureMarkdown } from "../markdown/chunker.js";
 import { anySignal, sleep } from "../util/async.js";
 import type { Logger } from "../util/logger.js";
 import { LruCache } from "../util/lru.js";
@@ -24,6 +32,8 @@ export interface SendOptions {
   preserveUnreadCursor?: boolean;
   /** Split oversized Markdown into several messages (default true). */
   autoChunk?: boolean;
+  /** Overrides the client's `attribution` for this write (`false` = none). Spec §9.1. */
+  attribution?: AttributionOverride;
 }
 
 export interface SendResult {
@@ -37,6 +47,8 @@ export interface UpdateOptions {
   ts: string;
   markdown?: string;
   blocks?: unknown[];
+  /** Overrides the client's `attribution` for this edit (`false` = none). */
+  attribution?: AttributionOverride;
 }
 
 export interface CreateStreamOptions {
@@ -44,6 +56,8 @@ export interface CreateStreamOptions {
   threadTs?: string;
   initialMarkdown?: string;
   preserveUnreadCursor?: boolean;
+  /** Overrides the client's `attribution` for every message of this stream (`false` = none). */
+  attribution?: AttributionOverride;
 }
 
 export interface ChatSchedulerOptions {
@@ -64,11 +78,37 @@ export interface ChatHooks {
   beforeAutoWrite(channel: string, threadTs: string | undefined): void;
   withUnreadGuard<T>(channel: string, enabled: boolean, fn: () => Promise<T>): Promise<T>;
   noteThreadActivity(channel: string, threadTs: string): void;
+  selfUserId(): string;
 }
+
+type OutgoingMessage = {
+  channel: string;
+  markdown?: string;
+  blocks?: unknown[];
+  threadTs?: string | undefined;
+  broadcast?: boolean | undefined;
+  attribution?: RenderedAttribution | null;
+};
 
 const CHAT_WINDOW_MS = 2_000;
 const NOT_FOUND_RETRY_MS = 175;
 const NOT_FOUND_RETRIES = 10;
+
+/** Chunk budget left for the body once the attribution line is counted. */
+function budgetFor(attribution: RenderedAttribution | null): number {
+  return attribution ? DEFAULT_CHUNK_BUDGET - measureMarkdown(attribution.text).effective : DEFAULT_CHUNK_BUDGET;
+}
+
+/**
+ * Body fields of a post or edit. With attribution, Markdown goes in a `markdown` block
+ * after the attribution block (`markdown_text` cannot be combined with `blocks`) and `text`
+ * carries a plain-text fallback.
+ */
+function bodyFields(markdown: string | undefined, blocks: unknown[] | undefined, attribution: RenderedAttribution | null | undefined): Record<string, unknown> {
+  if (!attribution) return markdown !== undefined ? { markdown_text: markdown } : { blocks };
+  if (markdown === undefined) return { blocks: [attribution.block, ...(blocks ?? [])] };
+  return { blocks: [attribution.block, { type: "markdown", text: markdown }], text: markdownToPlainText(markdown) || "…" };
+}
 
 function tsToMs(ts: string): number {
   return Number(ts.split(".")[0]) * 1000 + Number((ts.split(".")[1] ?? "0").padEnd(6, "0").slice(0, 3));
@@ -92,6 +132,7 @@ export class ChatApi {
     private readonly hooks: ChatHooks,
     private readonly logger: Logger,
     opts: ChatSchedulerOptions = {},
+    private readonly defaultAttribution?: DefaultAttribution,
   ) {
     this.semaphore = new PrioritySemaphore(opts.globalSendConcurrency ?? 4, 1);
     const rate = opts.streamUpdatesPerSecond ?? 2;
@@ -115,6 +156,19 @@ export class ChatApi {
     return this.streams;
   }
 
+  /**
+   * The exact attribution line and block a write with `override` would carry, or null when
+   * attribution is off. No request is made; requires a started client (for the self mention).
+   */
+  previewAttribution(override?: AttributionOverride, where: { channel?: string; threadTs?: string } = {}): RenderedAttribution | null {
+    return this.attributionFor(override, where.channel ?? "", where.threadTs);
+  }
+
+  private attributionFor(override: AttributionOverride | undefined, channel: string, threadTs: string | undefined): RenderedAttribution | null {
+    const a = resolveAttribution(this.defaultAttribution, override);
+    return a ? renderAttribution(a, { selfUserId: this.hooks.selfUserId(), channel, ...(threadTs ? { threadTs } : {}) }) : null;
+  }
+
   async send(opts: SendOptions, ctxSignal?: AbortSignal): Promise<SendResult> {
     const channel = assertChannelId(opts.channel);
     if (opts.threadTs !== undefined) assertTs(opts.threadTs, "threadTs");
@@ -125,9 +179,11 @@ export class ChatApi {
       throw new GabrielError("INVALID_ARGUMENT", "chat.send: `markdown` must be a non-empty string");
     }
     if (ctxSignal?.aborted) throw new GabrielError("CANCELLED", "context cancelled before send");
+    const attribution = this.attributionFor(opts.attribution, channel, opts.threadTs);
     this.hooks.beforeAutoWrite(channel, opts.threadTs);
     const autoChunk = opts.autoChunk !== false;
-    const pieces = opts.markdown !== undefined && autoChunk ? chunkMarkdown(opts.markdown) : [opts.markdown];
+    const budget = budgetFor(attribution);
+    const pieces = opts.markdown !== undefined && autoChunk ? chunkMarkdown(opts.markdown, budget, Math.min(DEFAULT_CHUNK_MIN, Math.floor(budget * 0.7))) : [opts.markdown];
     const priority: SendPriority = opts.priority ?? "normal";
 
     const result = await this.hooks.withUnreadGuard(channel, opts.preserveUnreadCursor === true, () =>
@@ -135,10 +191,10 @@ export class ChatApi {
         const chunkTs: string[] = [];
         for (const piece of pieces) {
           const posted = await this.postWithResplit(
-            { channel, ...(piece !== undefined ? { markdown: piece } : { blocks: opts.blocks! }), threadTs: opts.threadTs, broadcast: opts.broadcast },
+            { channel, ...(piece !== undefined ? { markdown: piece } : { blocks: opts.blocks! }), threadTs: opts.threadTs, broadcast: opts.broadcast, attribution },
             priority,
             autoChunk,
-            DEFAULT_CHUNK_BUDGET,
+            budget,
             ctxSignal,
           );
           chunkTs.push(...posted);
@@ -156,7 +212,8 @@ export class ChatApi {
     if ((opts.markdown === undefined) === (opts.blocks === undefined)) {
       throw new GabrielError("INVALID_ARGUMENT", "chat.update: pass exactly one of `markdown` or `blocks`");
     }
-    await this.rawUpdate(channel, ts, opts.markdown, opts.blocks, "normal");
+    const attribution = this.attributionFor(opts.attribution, channel, undefined);
+    await this.rawUpdate(channel, ts, opts.markdown, opts.blocks, "normal", attribution);
     return { channel, ts };
   }
 
@@ -183,12 +240,14 @@ export class ChatApi {
   async createStream(opts: CreateStreamOptions, linkedSignal?: AbortSignal): Promise<StreamController> {
     const channel = assertChannelId(opts.channel);
     if (opts.threadTs !== undefined) assertTs(opts.threadTs, "threadTs");
+    const attribution = this.attributionFor(opts.attribution, channel, opts.threadTs);
     this.hooks.beforeAutoWrite(channel, opts.threadTs);
     const initial = opts.initialMarkdown && opts.initialMarkdown.trim() ? opts.initialMarkdown : "…";
+    const budget = budgetFor(attribution);
     const post = (markdown: string, threadTs?: string) =>
       this.hooks.withUnreadGuard(channel, opts.preserveUnreadCursor === true, () =>
         this.inChannelOrder(channel, async () => {
-          const [ts] = await this.postWithResplit({ channel, markdown, threadTs }, "interactive", false, DEFAULT_CHUNK_BUDGET, linkedSignal);
+          const [ts] = await this.postWithResplit({ channel, markdown, threadTs, attribution }, "interactive", false, budget, linkedSignal);
           return ts!;
         }),
       );
@@ -199,13 +258,13 @@ export class ChatApi {
       {
         channel,
         ...(opts.threadTs ? { threadTs: opts.threadTs } : {}),
-        budget: DEFAULT_CHUNK_BUDGET,
+        budget,
         minIntervalMs: this.streamMinIntervalMs,
         ...(linkedSignal ? { linkedSignal } : {}),
       },
       {
         post: (markdown, o) => post(markdown, o.threadTs),
-        update: (ts, markdown) => this.rawUpdate(channel, ts, markdown, undefined, "stream_update"),
+        update: (ts, markdown) => this.rawUpdate(channel, ts, markdown, undefined, "stream_update", attribution),
       },
       this.bucket,
       this.registry,
@@ -238,7 +297,7 @@ export class ChatApi {
   }
 
   private async postWithResplit(
-    msg: { channel: string; markdown?: string; blocks?: unknown[]; threadTs?: string | undefined; broadcast?: boolean | undefined },
+    msg: OutgoingMessage,
     priority: SendPriority,
     autoChunk: boolean,
     budget: number,
@@ -261,7 +320,7 @@ export class ChatApi {
   }
 
   private async postOne(
-    msg: { channel: string; markdown?: string; blocks?: unknown[]; threadTs?: string | undefined; broadcast?: boolean | undefined },
+    msg: OutgoingMessage,
     priority: SendPriority,
     signal?: AbortSignal,
   ): Promise<string> {
@@ -277,9 +336,8 @@ export class ChatApi {
         client_msg_id: clientMsgId,
         include_channel_perm_error: true,
         unfurl: "[]",
+        ...bodyFields(msg.markdown, msg.blocks, msg.attribution),
       };
-      if (msg.markdown !== undefined) fields.markdown_text = msg.markdown;
-      else fields.blocks = msg.blocks;
       if (msg.threadTs) {
         fields.thread_ts = msg.threadTs;
         if (msg.broadcast) fields.reply_broadcast = true;
@@ -309,13 +367,18 @@ export class ChatApi {
     }
   }
 
-  private async rawUpdate(channel: string, ts: string, markdown: string | undefined, blocks: unknown[] | undefined, priority: SendPriority): Promise<void> {
+  private async rawUpdate(
+    channel: string,
+    ts: string,
+    markdown: string | undefined,
+    blocks: unknown[] | undefined,
+    priority: SendPriority,
+    attribution: RenderedAttribution | null,
+  ): Promise<void> {
     this.registry.registerPendingEdit(ts);
     const release = await this.semaphore.acquire(priority, AbortSignal.timeout(this.itemDeadlineMs));
     try {
-      const fields: Record<string, unknown> = { channel, ts, skip_dlp_user_warning: false };
-      if (markdown !== undefined) fields.markdown_text = markdown;
-      else fields.blocks = blocks;
+      const fields: Record<string, unknown> = { channel, ts, skip_dlp_user_warning: false, ...bodyFields(markdown, blocks, attribution) };
       const res = await this.withNotFoundRetry(ts, () =>
         this.core.callWebApi<{ message?: Record<string, unknown> }>("chat.update", fields, { reason: "saveMessageEdit" }),
       );

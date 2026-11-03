@@ -1,0 +1,71 @@
+{
+  "description": "A context block without the gabriel.attribution block ID stays part of markdown",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "Thanks",
+    "ts": "1800000005.000100",
+    "blocks": [
+      {
+        "type": "context",
+        "block_id": "Xy1Zq",
+        "elements": [
+          {
+            "type": "mrkdwn",
+            "text": ":robot_face: Some Agent · confirmed by <@U0ALICE0001>"
+          }
+        ]
+      },
+      {
+        "type": "section",
+        "block_id": "b0003",
+        "text": {
+          "type": "mrkdwn",
+          "text": "Thanks"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "type": "message.created",
+    "eventId": "C0GENERAL01:1800000005.000100:created",
+    "ts": "1800000005.000100",
+    "delivery": "realtime",
+    "origin": "other_user",
+    "text": "Thanks",
+    "markdown": ":robot_face: Some Agent · confirmed by @Alice\n\nThanks",
+    "sender": {
+      "id": "U0ALICE0001",
+      "isBot": false,
+      "displayName": "Alice"
+    },
+    "channel": {
+      "id": "C0GENERAL01",
+      "name": "general"
+    },
+    "thread": null,
+    "isThreadReply": false,
+    "mentions": [],
+    "isMentioningMe": false,
+    "files": []
+  }
+}

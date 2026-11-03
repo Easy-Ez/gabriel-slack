@@ -12,7 +12,9 @@ from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 from ..core.types import RequestOpts
 from ..errors import GabrielError
 from ..events.normalize import render_message_markdown, to_file_refs
-from ..events.types import ChannelRef, DndInfo, FileRef, UserRef
+from ..events.types import ChannelRef, DndInfo, FileRef, MessageAttribution, UserRef
+from ..markdown.attribution import attribution_user_ids, parse_attribution
+from ..markdown.chunker import _JS_WS
 from ..util.validate import (
     assert_channel_id,
     assert_non_empty_string,
@@ -42,6 +44,7 @@ def _o(v: Any) -> Obj:
 _HIGHLIGHT = re.compile("[]")
 _USER_MENTION = re.compile(r"<@([UW][A-Z0-9]+)")
 _HUMAN_ID = re.compile(r"^[UW]")
+_WHITESPACE_RUN = re.compile(f"[{_JS_WS}]+")
 
 
 def strip_highlight(text: str) -> str:
@@ -69,6 +72,7 @@ class _Rendered:
     sender: UserRef
     markdown: str
     files: list[FileRef]
+    attribution: MessageAttribution | None = None
 
 
 async def _render_messages(h: Hydrator, messages: list[Obj]) -> list[_Rendered]:
@@ -79,11 +83,17 @@ async def _render_messages(h: Hydrator, messages: list[Obj]) -> list[_Rendered]:
             ids[m["user"]] = None
         for mm in _USER_MENTION.finditer(_s(m.get("text")) or ""):
             ids[mm.group(1)] = None
+        for uid in attribution_user_ids(m):
+            ids[uid] = None
     await asyncio.gather(*(h.users.load(id) for id in ids), return_exceptions=True)
 
     async def one(msg: Obj) -> _Rendered:
         return _Rendered(
-            msg, await _sender_of(h, msg), render_message_markdown(msg, h.resolver), to_file_refs(msg.get("files"))
+            msg,
+            await _sender_of(h, msg),
+            render_message_markdown(msg, h.resolver),
+            to_file_refs(msg.get("files")),
+            parse_attribution(msg.get("blocks"), h.resolver),
         )
 
     return list(await asyncio.gather(*(one(m) for m in messages)))
@@ -100,6 +110,8 @@ class ThreadMessage:
     markdown: str
     files: list[FileRef]
     is_deleted: bool
+    #: Self-declared agent attribution line, removed from ``markdown`` (spec §9.1). Unverified.
+    attribution: MessageAttribution | None = None
 
 
 @dataclass(kw_only=True, slots=True)
@@ -128,7 +140,8 @@ def format_transcript(channel: ChannelRef, root_ts: str, messages: list[ThreadMe
         else:
             body = m.markdown or ("" if m.files else "_(empty)_")
         files = f"\n  [files: {', '.join(f.name for f in m.files)}]" if m.files else ""
-        lines.append(f"[{_format_time(m.ts)}] {who}{handle}:")
+        via = f" [attribution: {_WHITESPACE_RUN.sub(' ', m.attribution.text)}]" if m.attribution else ""
+        lines.append(f"[{_format_time(m.ts)}] {who}{handle}{via}:")
         lines.extend(f"  {line}" for line in body.split("\n"))
         if files:
             lines.append(files)
@@ -192,6 +205,7 @@ class ThreadsApi:
                 ts=_s(r.msg.get("ts")) or "",
                 sender=r.sender,
                 markdown=r.markdown,
+                attribution=r.attribution,
                 files=r.files,
                 is_deleted=r.msg.get("subtype") == "tombstone" or r.msg.get("is_deleted") is True,
             )
@@ -232,6 +246,7 @@ class ThreadsApi:
                     ts=_s(r.msg.get("ts")) or "",
                     sender=r.sender,
                     markdown=r.markdown,
+                    attribution=r.attribution,
                     files=r.files,
                     is_deleted=r.msg.get("subtype") == "tombstone",
                 )
@@ -566,6 +581,8 @@ class HistoryMessage:
     markdown: str
     files: list[FileRef]
     thread: HistoryThread | None
+    #: Self-declared agent attribution line, removed from ``markdown`` (spec §9.1). Unverified.
+    attribution: MessageAttribution | None = None
 
 
 @dataclass(kw_only=True, slots=True)
@@ -700,6 +717,7 @@ def _to_history_message(r: _Rendered) -> HistoryMessage:
         ts=_s(msg.get("ts")) or "",
         sender=r.sender,
         markdown=r.markdown,
+        attribution=r.attribution,
         files=r.files,
         thread=HistoryThread(
             root_ts=thread_ts,

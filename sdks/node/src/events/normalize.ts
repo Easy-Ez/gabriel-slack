@@ -1,4 +1,5 @@
 import type { RawWsFrame } from "../core/types.js";
+import { parseAttribution, splitAttribution } from "../markdown/attribution.js";
 import { convertBlocksToMarkdown, mrkdwnToMarkdown, type EntityResolver } from "../markdown/blocks-to-markdown.js";
 import { createHash } from "node:crypto";
 import type {
@@ -151,9 +152,12 @@ export function extractMentions(blocks: unknown, text: string | undefined): Ment
   return out;
 }
 
-/** Renders a message body to Markdown: blocks first, then mrkdwn text, then legacy attachments. */
+/**
+ * Renders a message body to Markdown: blocks first, then mrkdwn text, then legacy attachments.
+ * A leading attribution block (spec §9.1) is not part of the body.
+ */
 export function renderMessageMarkdown(message: Record<string, unknown>, r: EntityResolver): string {
-  let md = convertBlocksToMarkdown(message.blocks, r);
+  let md = convertBlocksToMarkdown(splitAttribution(message.blocks).rest, r);
   if (!md) md = mrkdwnToMarkdown(typeof message.text === "string" ? message.text : "", r);
   if (Array.isArray(message.attachments)) {
     const parts: string[] = [];
@@ -199,9 +203,16 @@ function senderOf(message: Record<string, unknown>) {
   return { id, isBot, ...(name ? { name, displayName: name } : {}) };
 }
 
+/** User IDs mentioned in a message's attribution line (rendered as names, not mentions). */
+export function attributionUserIds(message: Record<string, unknown>): string[] {
+  const { block } = splitAttribution(message.blocks);
+  return block ? [...JSON.stringify(block.elements ?? []).matchAll(/<@([UW][A-Z0-9]+)/g)].map((m) => m[1]!) : [];
+}
+
 function collectMessageNeeds(needs: EntityNeeds, message: Record<string, unknown>, mentions: Mention[]): void {
   const user = str(message.user);
   if (user && !message.bot_profile) needs.users.add(user);
+  for (const id of attributionUserIds(message)) needs.users.add(id);
   for (const m of mentions) {
     if (m.kind === "user") needs.users.add(m.id);
     if (m.kind === "usergroup") needs.usergroups.add(m.id);
@@ -229,7 +240,7 @@ function normalizeMessageCreated(frame: RawWsFrame, ctx: NormalizeContext): Draf
   if (!channel || !ts) return null;
   const subtype = str(frame.subtype);
   const text = typeof frame.text === "string" ? frame.text : "";
-  const mentions = extractMentions(frame.blocks, text);
+  const mentions = extractMentions(splitAttribution(frame.blocks).rest, text);
   const thread = threadOf(frame, ts, subtype);
   const isMySubteam = ctx.isMySubteam ?? (() => false);
   const isMentioningMe = mentions.some(
@@ -269,6 +280,8 @@ function normalizeMessageCreated(frame: RawWsFrame, ctx: NormalizeContext): Draf
     createdTs: ts,
     render(r) {
       evt.markdown = renderMessageMarkdown(frame, r);
+      const attribution = parseAttribution(frame.blocks, r);
+      if (attribution) evt.attribution = attribution;
       if (!evt.sender.isBot) {
         const name = r.userName?.(evt.sender.id);
         if (name) evt.sender.displayName = name;
@@ -332,7 +345,7 @@ function normalizeMessageChanged(frame: RawWsFrame, ctx: NormalizeContext): Draf
   // Metadata-only change (reply_count, unfurl bookkeeping…): body hash unchanged → no event.
   if (previous && contentHash(previous) === contentHash(message)) return null;
 
-  const mentions = extractMentions(message.blocks, typeof message.text === "string" ? message.text : undefined);
+  const mentions = extractMentions(splitAttribution(message.blocks).rest, typeof message.text === "string" ? message.text : undefined);
   collectMessageNeeds(needs, message, mentions);
   const edited = obj(message.edited);
   const evt: MessageUpdatedEvent = {
@@ -347,7 +360,7 @@ function normalizeMessageChanged(frame: RawWsFrame, ctx: NormalizeContext): Draf
     ...(threadTs ? { threadTs } : {}),
     raw: frame,
   };
-  if (previous) collectMessageNeeds(needs, previous, extractMentions(previous.blocks, str(previous.text)));
+  if (previous) collectMessageNeeds(needs, previous, extractMentions(splitAttribution(previous.blocks).rest, str(previous.text)));
   return {
     event: evt,
     laneKey: channel,
@@ -358,6 +371,8 @@ function normalizeMessageChanged(frame: RawWsFrame, ctx: NormalizeContext): Draf
     render(r) {
       evt.currentMarkdown = renderMessageMarkdown(message, r);
       if (previous) evt.previousMarkdown = renderMessageMarkdown(previous, r);
+      const attribution = parseAttribution(message.blocks, r);
+      if (attribution) evt.attribution = attribution;
       const name = evt.sender.isBot ? undefined : r.userName?.(evt.sender.id);
       if (name) evt.sender.displayName = name;
       const cname = r.channelName?.(channel);

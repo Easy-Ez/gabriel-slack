@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, TypeGuard, cast
 
 from ..core.types import RawWsFrame
+from ..markdown.attribution import attribution_user_ids, parse_attribution, split_attribution
 from ..markdown.blocks_to_markdown import EntityResolver, convert_blocks_to_markdown, mrkdwn_to_markdown
 from .types import (
     AiStreamCompletedEvent,
@@ -356,8 +357,11 @@ def extract_mentions(blocks: Any, text: str | None) -> list[Mention]:
 
 
 def render_message_markdown(message: dict[str, Any], r: EntityResolver) -> str:
-    """Renders a message body to Markdown: blocks first, then mrkdwn text, then legacy attachments."""
-    md = convert_blocks_to_markdown(message.get("blocks"), r)
+    """Renders a message body to Markdown: blocks first, then mrkdwn text, then legacy attachments.
+
+    A leading attribution block (spec §9.1) is not part of the body.
+    """
+    md = convert_blocks_to_markdown(split_attribution(message.get("blocks"))[1], r)
     if not md:
         text = message.get("text")
         md = mrkdwn_to_markdown(text if isinstance(text, str) else "", r)
@@ -413,6 +417,8 @@ def _collect_message_needs(needs: EntityNeeds, message: dict[str, Any], mentions
     user = _str(message.get("user"))
     if user and not _truthy(message.get("bot_profile")):
         needs.users.add(user)
+    for uid in attribution_user_ids(message):
+        needs.users.add(uid)
     for m in mentions:
         if m.kind == "user":
             needs.users.add(m.id)
@@ -451,7 +457,7 @@ def _normalize_message_created(frame: RawWsFrame, ctx: NormalizeContext) -> Draf
     subtype = _str(frame.get("subtype"))
     raw_text = frame.get("text")
     text = raw_text if isinstance(raw_text, str) else ""
-    mentions = extract_mentions(frame.get("blocks"), text)
+    mentions = extract_mentions(split_attribution(frame.get("blocks"))[1], text)
     thread = _thread_of(frame, ts, subtype)
     is_my_subteam = ctx.is_my_subteam if ctx.is_my_subteam is not None else (lambda _id: False)
     is_mentioning_me = any(
@@ -485,6 +491,9 @@ def _normalize_message_created(frame: RawWsFrame, ctx: NormalizeContext) -> Draf
 
     def render(r: EntityResolver) -> None:
         evt.markdown = render_message_markdown(frame, r)
+        attribution = parse_attribution(frame.get("blocks"), r)
+        if attribution is not None:
+            evt.attribution = attribution
         if not evt.sender.is_bot:
             name = _resolve_user(r, evt.sender.id)
             if name:
@@ -570,7 +579,9 @@ def _normalize_message_changed(frame: RawWsFrame, ctx: NormalizeContext) -> Draf
         return None
 
     msg_text = message.get("text")
-    mentions = extract_mentions(message.get("blocks"), msg_text if isinstance(msg_text, str) else None)
+    mentions = extract_mentions(
+        split_attribution(message.get("blocks"))[1], msg_text if isinstance(msg_text, str) else None
+    )
     _collect_message_needs(needs, message, mentions)
     edited = _obj(message.get("edited"))
     evt = MessageUpdatedEvent(
@@ -585,12 +596,16 @@ def _normalize_message_changed(frame: RawWsFrame, ctx: NormalizeContext) -> Draf
         raw=frame,
     )
     if previous is not None:
-        _collect_message_needs(needs, previous, extract_mentions(previous.get("blocks"), _str(previous.get("text"))))
+        prev_mentions = extract_mentions(split_attribution(previous.get("blocks"))[1], _str(previous.get("text")))
+        _collect_message_needs(needs, previous, prev_mentions)
 
     def render(r: EntityResolver) -> None:
         evt.current_markdown = render_message_markdown(message, r)
         if previous is not None:
             evt.previous_markdown = render_message_markdown(previous, r)
+        attribution = parse_attribution(message.get("blocks"), r)
+        if attribution is not None:
+            evt.attribution = attribution
         name = None if evt.sender.is_bot else _resolve_user(r, evt.sender.id)
         if name:
             evt.sender.display_name = name

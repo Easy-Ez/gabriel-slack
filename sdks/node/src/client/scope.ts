@@ -298,6 +298,10 @@ export class ScopedClient {
   private async checkWrite(action: ScopedWriteAction, target: Target, params: unknown): Promise<void> {
     const w = this.policy.write;
     if (w?.allowedActions && !w.allowedActions.includes(action)) throw this.deny(action, "action is not in write.allowedActions");
+    // A scoped caller (an LLM tool) must not claim `review: "confirmed"` or drop the line.
+    if (action.startsWith("chat.") && (params as { attribution?: unknown } | undefined)?.attribution !== undefined) {
+      throw this.deny(action, "attribution overrides are not allowed; the client's default attribution applies");
+    }
     if (w?.targetScope === "trigger_thread_only") {
       const trigger = currentTrigger();
       if (!trigger || !trigger.channel) throw this.deny(action, "trigger_thread_only writes must happen inside an event handler with a channel");

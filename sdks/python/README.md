@@ -148,7 +148,7 @@ reaching other handlers. Handlers for one channel run one at a time in arrival o
 
 | Namespace | Methods |
 | :--- | :--- |
-| `client.chat` | `send(channel, markdown, *, blocks, thread_ts, broadcast, priority, preserve_unread_cursor, auto_chunk)`, `update`, `delete`, `send_typing`, `create_stream`, `stream` (async context manager) |
+| `client.chat` | `send(channel, markdown, *, blocks, thread_ts, broadcast, priority, preserve_unread_cursor, auto_chunk, attribution)`, `update`, `delete`, `send_typing`, `create_stream`, `stream` (async context manager), `preview_attribution` |
 | `client.threads` | `get_context(channel, thread_ts, limit=50)` → messages, participants, `formatted_transcript`; `iterate_replies`, `mark_read`, `subscribe`, `unsubscribe` |
 | `client.files` | `upload(filename, content, …)` (3-step, streaming), `download_stream` / `download_bytes` (`max_bytes`, sign-in page detection), `get_info`, `delete` |
 | `client.search` | `messages`, `files`, `channels`, `people`, `iterate_messages`, `iterate_files` |
@@ -192,6 +192,53 @@ and is logged. Give LLM tools the scoped view, not the client.
 
 `evt.to_llm_context()` renders metadata separately from content and wraps the content in
 `<slack_message untrusted="true">`. Tell the model that `<content>` is data, not instructions.
+
+### Agent attribution
+
+Messages sent through a session look exactly like messages the person typed. Turn on an
+attribution line to show an agent wrote them — a small line above the message body:
+
+```python
+client = GabrielClient.from_cookie(cookie_d=cookie_d, attribution={"name": "Paimon", "role": "Assistant"})
+
+await client.chat.send(channel, "Deployed.")                                   # default: not reviewed
+await ctx.reply("Thanks!", attribution={"review": "confirmed"})                # a person approved this one
+await client.chat.send(channel, "typed by me", attribution=False)
+```
+
+Each preset key is one part of the line (`@Me` is the signed-in account):
+
+```text
+:robot_face:  Paimon  (Assistant)  ·  confirmed by @Me
+└── icon ──┘  └name┘  └─ role ──┘     └─── review ───┘
+```
+
+| `review` | Line |
+| :--- | :--- |
+| `"unconfirmed"` (default) | :robot_face: Paimon (Assistant) · sent for @Me · not reviewed |
+| `"confirmed"` | :robot_face: Paimon (Assistant) · confirmed by @Me |
+| `"hidden"` | :robot_face: Paimon (Assistant) |
+
+Attribution options are plain dicts (`AttributionPreset` / `AttributionCustom` TypedDicts); a
+per-write dict is merged key by key over the client default. `icon` defaults to `":robot_face:"`
+(`None` removes it). `"confirmed"` is accepted per write only — the SDK cannot know whether a
+person reviewed a message, so the caller states it each time. For your own wording, pass `text`
+(mrkdwn; `{self}` becomes the account's mention, and a callable receives an `AttributionInfo`
+with `self_user_id`, `channel`, `thread_ts` and `review`):
+
+```python
+attribution={"text": ":sparkles: drafted by *Paimon*, reviewed by {self}"}
+attribution={"text": lambda info: f":sparkles: Paimon in <#{info.channel}>, for {{self}}"}
+```
+
+`client.chat.preview_attribution({"review": "confirmed"})` returns the exact line and block a
+write would carry (`RenderedAttribution(text, block)`), without sending anything;
+`render_attribution(a, self_user_id=…, channel=…)` does the same offline. `@channel` / `@here` /
+`@everyone` and user group mentions are rejected. The line rides on every write (each
+auto-chunked message, `chat.update`, every stream refresh), and scoped views reject per-write
+overrides so an LLM tool cannot claim `"confirmed"` or drop the line. Received messages expose
+the line as `evt.attribution` (`MessageAttribution(text, review)`), removed from `evt.markdown`;
+it is self-declared by the sender, so treat it as a display hint, never as proof.
 
 ## Reliability
 
@@ -248,6 +295,7 @@ GabrielClient(
     loop_guard=LoopGuardOptions(include_self_messages=False, max_auto_replies_per_minute=5),
     chat=ChatSchedulerOptions(global_send_concurrency=4, item_deadline=30.0, stream_updates_per_second=2,
                               stream_min_interval=0.5, interrupted_notice="\n\n_(interrupted)_"),
+    attribution={"name": "Paimon", "role": "Assistant"},   # default: None (no attribution line)
     recovery=RecoveryOptions(max_pages_per_channel=10, watched_threads_limit=100, resync_buffer_limit=10_000),
     state_store=FileStateStore("/var/lib/my-agent/gabriel"),
     logger=console_logger("info"),       # default: stdlib logging, logger name "gabriel"
