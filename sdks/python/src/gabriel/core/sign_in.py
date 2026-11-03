@@ -416,7 +416,7 @@ async def _run(
         exit_watch.add_done_callback(lambda _t: fail(_window_closed()))
         ws_url = await guard(_wait_for_devtools(deps, profile, stop.signal))
         try:
-            socket = await guard(asyncio.wait_for(deps.connect(ws_url), deps.launch_timeout))
+            socket = await guard(_within(deps.launch_timeout, deps.connect(ws_url)))
         except (OSError, TimeoutError) as err:
             raise GabrielError("INVALID_STATE", "could not reach the sign-in browser window", cause=err) from None
         cdp = _Cdp(socket)
@@ -480,6 +480,16 @@ async def _run(
     return result
 
 
+async def _within(seconds: float, awaitable: Awaitable[T]) -> T:
+    """``await`` with a time limit, raising ``TimeoutError``.
+
+    Not ``asyncio.wait_for``: on Python 3.11 it swallows a task cancellation that arrives as the
+    awaitable completes, which would leave the sign-in window open until the overall timeout.
+    """
+    async with asyncio.timeout(seconds):
+        return await awaitable
+
+
 async def _close_window(
     deps: SignInDeps, proc: BrowserProcess | None, exit_watch: asyncio.Task[int] | None, socket: CdpSocket | None
 ) -> None:
@@ -492,11 +502,11 @@ async def _close_window(
         with contextlib.suppress(ProcessLookupError):
             proc.terminate()
         try:
-            await asyncio.wait_for(asyncio.shield(proc.wait()), deps.exit_wait)
+            await _within(deps.exit_wait, asyncio.shield(proc.wait()))
         except TimeoutError:
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(asyncio.shield(proc.wait()), deps.exit_wait)
+                await _within(deps.exit_wait, asyncio.shield(proc.wait()))
     if exit_watch is not None and not exit_watch.done():
         exit_watch.cancel()
