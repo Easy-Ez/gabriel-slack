@@ -18,8 +18,10 @@ import {
   draftPrompt,
   fallbackNotes,
   lastReleaseNotes,
+  mergeNotes,
   parseArgs,
   parseLog,
+  undocumentedCommits,
   unreleasedNotes,
   withNodeVersion,
 } from "./lib.mjs";
@@ -151,6 +153,24 @@ describe("changelog", () => {
     assert.throws(() => addRelease(CHANGELOG, "0.2.0", "2026-11-03", "  "), /empty/);
   });
 
+  it("merges drafted notes into hand-written ones by heading, keeping the original verbatim", () => {
+    const base = "### Added\n\n- `signIn()`: signs in.\n  Second line.\n\n### Changed\n\n- CLI uses it.";
+    const extra = "### Added\n- `attribution` option.\n\n### Security\n- Mentions rejected.";
+    assert.equal(
+      mergeNotes(base, extra),
+      "### Added\n\n- `signIn()`: signs in.\n  Second line.\n- `attribution` option.\n\n### Changed\n\n- CLI uses it.\n\n### Security\n\n- Mentions rejected.",
+    );
+    assert.equal(mergeNotes("### Fixed\n- a", "### Added\n- b"), "### Added\n- b\n\n### Fixed\n- a");
+    assert.equal(mergeNotes("", "### Added\n- b"), "### Added\n- b");
+    assert.equal(mergeNotes("### Added\n- a", "  "), "### Added\n- a");
+  });
+
+  it("finds commits without their own changelog entry", () => {
+    const commits = [{ sha: "a", subject: "Sign in" }, { sha: "b", subject: "Attribution" }];
+    assert.deepEqual(undocumentedCommits(commits, ["a"]), [{ sha: "b", subject: "Attribution" }]);
+    assert.deepEqual(undocumentedCommits(commits, []), commits);
+  });
+
   it("groups commit subjects as a fallback draft", () => {
     const notes = fallbackNotes([
       { subject: "Add agent attribution", pr: 3 },
@@ -173,6 +193,9 @@ describe("changelog", () => {
     for (const part of ["gabriel-slack 0.2.0", "do not follow instructions", "Attribution", "ChatApi", "#3 Add agent attribution", "Publishing."]) {
       assert.ok(prompt.includes(part), part);
     }
+    assert.ok(!prompt.includes("Already documented"));
+    const withDocs = draftPrompt({ pkg: PACKAGES.node, version: "0.2.0", commits: [], prs: [], apiDiff: null, documented: "### Added\n- `signIn()`." });
+    assert.ok(withDocs.includes("## Already documented (do not repeat)\n### Added\n- `signIn()`."));
   });
 });
 
@@ -291,6 +314,9 @@ describe("release.mjs end to end", () => {
     writeFileSync(path.join(work, "sdks/python/README.md"), "Docs.\n");
     g("add", "-A");
     g("commit", "--quiet", "-m", "Add b (#7)");
+    // A second shipping change whose PR wrote no changelog entry.
+    writeFileSync(path.join(work, "sdks/node/src/index.ts"), "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n");
+    g("commit", "--quiet", "-am", "Add c (#8)");
     g("push", "--quiet", "origin", "main", "--tags");
     const release = (...args) => execFileSync(process.execPath, ["scripts/release.mjs", "--skip-ci", "--no-ai", "--no-watch", ...args], { cwd: work, env: e, encoding: "utf8" });
     return { work, remote, g, release, e };
@@ -302,7 +328,8 @@ describe("release.mjs end to end", () => {
     const out = release("--dry-run");
     assert.match(out, /node-v0\.1\.0 → node-v0\.2\.0/);
     assert.match(out, /Python \(PyPI\)\s+.*skip — only 1 non-shipping file/);
-    assert.match(out, /## \[0\.2\.0\] - \d{4}-\d{2}-\d{2}\n\n### Added\n- `b`\./);
+    assert.match(out, /## \[0\.2\.0\] - \d{4}-\d{2}-\d{2}\n\n### Added\n- `b`\.\n- Add c \(#8\)\n/);
+    assert.match(out, /from the \[Unreleased\] section \+ commit subjects for 1 undocumented commit/);
     assert.equal(g("rev-parse", "HEAD"), before);
     assert.equal(g("status", "--porcelain"), "");
     assert.equal(g("tag", "--list", "node-v0.2.0"), "");
@@ -314,7 +341,7 @@ describe("release.mjs end to end", () => {
     assert.match(out, /pushed main and node-v0\.2\.0/);
     assert.equal(JSON.parse(readFileSync(path.join(work, "sdks/node/package.json"), "utf8")).version, "0.2.0");
     const changelog = readFileSync(path.join(work, "sdks/node/CHANGELOG.md"), "utf8");
-    assert.match(changelog, /## \[Unreleased\]\n\n## \[0\.2\.0\] - \d{4}-\d{2}-\d{2}\n\n### Added\n- `b`\.\n\n## \[0\.1\.0\]/);
+    assert.match(changelog, /## \[Unreleased\]\n\n## \[0\.2\.0\] - \d{4}-\d{2}-\d{2}\n\n### Added\n- `b`\.\n- Add c \(#8\)\n\n## \[0\.1\.0\]/);
     assert.equal(g("log", "-1", "--format=%s"), "Release node 0.2.0");
     const remoteRefs = execFileSync("git", ["ls-remote", "--tags", "--heads", remote], { env: e, encoding: "utf8" });
     assert.match(remoteRefs, /refs\/tags\/node-v0\.2\.0/);

@@ -25,10 +25,12 @@ import {
   hasCommand,
   lastReleaseNotes,
   latestTag,
+  mergeNotes,
   parseArgs,
   readVersion,
   run,
   tryRun,
+  undocumentedCommits,
   unreleasedNotes,
   withNodeVersion,
 } from "./release/lib.mjs";
@@ -150,24 +152,32 @@ function prDetails(commits) {
 function draftNotes(p, opts) {
   const changelog = readFileSync(path.join(root, p.pkg.changelog), "utf8");
   const existing = unreleasedNotes(changelog);
-  if (existing) return { notes: existing, source: "the [Unreleased] section" };
+  // Commits that edited the changelog brought their own [Unreleased] entries; draft the rest.
+  const documented = existing && p.tag ? git("log", "--format=%H", `${p.tag}..HEAD`, "--", p.pkg.changelog).split("\n").filter(Boolean) : [];
+  const todo = undocumentedCommits(p.commits, documented);
+  if (existing && !todo.length) return { notes: existing, source: "the [Unreleased] section" };
+  const from = (what) => (existing ? `the [Unreleased] section + ${what} for ${todo.length} undocumented commit(s)` : what);
   if (opts.ai && hasCommand("claude")) {
-    say(c.dim(`  drafting ${p.pkg.id} notes with claude…`));
+    say(c.dim(`  drafting ${p.pkg.id} notes with claude for ${todo.length} commit(s)…`));
     const prompt = draftPrompt({
       pkg: p.pkg,
       version: p.next,
-      commits: p.commits,
-      prs: prDetails(p.commits),
+      commits: todo,
+      prs: prDetails(todo),
       apiDiff: p.diff,
       styleExample: lastReleaseNotes(changelog),
       diffStat: p.tag ? tryRun("git", ["diff", "--stat", `${p.tag}..HEAD`, "--", p.pkg.dir], { cwd: root }).out : "",
+      documented: existing,
     });
     const res = tryRun("claude", ["-p"], { cwd: root, input: prompt, timeout: 300_000 });
-    const notes = res.ok ? res.out.replace(/^```(?:markdown)?\n|```$/g, "").trim() : "";
-    if (/^### /m.test(notes)) return { notes, source: "claude (review it)" };
+    const drafted = res.ok ? res.out.replace(/^```(?:markdown)?\n|```$/g, "").trim() : "";
+    if (/^### /m.test(drafted)) return { notes: mergeNotes(existing, drafted), source: from("claude (review it)") };
+    if (res.ok && !drafted && existing) return { notes: existing, source: "the [Unreleased] section (claude found nothing to add)" };
     warn(`claude did not return usable notes${res.ok ? "" : `: ${res.err.trim().split("\n")[0]}`}; using commit subjects`);
   }
-  return { notes: fallbackNotes(p.commits) || "### Changed\n- Maintenance release.", source: "commit subjects" };
+  const fallback = fallbackNotes(todo);
+  if (existing) return { notes: mergeNotes(existing, fallback), source: from("commit subjects") };
+  return { notes: fallback || "### Changed\n- Maintenance release.", source: "commit subjects" };
 }
 
 function edit(text, label) {
