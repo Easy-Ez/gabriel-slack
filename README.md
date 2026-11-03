@@ -24,7 +24,7 @@ with safe defaults.
 | :--- | :--- | :--- |
 | TypeScript / Node.js | [`gabriel-slack`](./sdks/node) | **Preview (0.1)**: reference implementation |
 | Go | [`sdks/go`](./sdks/go) | Planned |
-| Python | [`sdks/python`](./sdks/python) | Planned |
+| Python | [`gabriel-slack`](./sdks/python) (import `gabriel`) | **Preview (0.1)**: asyncio, full parity with the reference |
 
 Every SDK implements the same language-neutral contract in [`spec/`](./spec): a behavior
 specification, a JSON Schema for every event, and shared conformance fixtures.
@@ -82,7 +82,7 @@ the triggering message is deleted. See the [Node.js SDK guide](./sdks/node/READM
 spec/            Language-neutral contract: behavior.md, events JSON Schema, conformance fixtures
 sdks/node/       TypeScript reference SDK (gabriel-slack) + `gabriel` CLI
 sdks/go/         Go SDK (planned)
-sdks/python/     Python SDK (planned)
+sdks/python/     Python SDK (distribution gabriel-slack, import `gabriel`) + `gabriel` CLI
 docs/            Architecture overview and a Chinese user guide
 scripts/         Spec consistency check and leak check
 ```

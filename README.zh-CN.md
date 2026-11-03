@@ -15,7 +15,7 @@ Gabriel 使用与 Slack 网页端相同的会话凭证（`d` 会话 Cookie，由
 | :--- | :--- | :--- |
 | TypeScript / Node.js | [`gabriel-slack`](./sdks/node) | **预览版 (0.1)**，参考实现 |
 | Go | [`sdks/go`](./sdks/go) | 规划中 |
-| Python | [`sdks/python`](./sdks/python) | 规划中 |
+| Python | [`gabriel-slack`](./sdks/python)（import `gabriel`） | **预览版 (0.1)**，asyncio，与参考实现功能对齐 |
 
 所有语言的 SDK 都实现 [`spec/`](./spec) 中同一份语言无关的契约：行为规范、全量事件 JSON Schema 和共享的一致性测试夹具。
 
@@ -40,7 +40,7 @@ client.onMessage({ mentionsMe: true }, async (evt, ctx) => {
 await client.start();
 ```
 
-完整说明见 [Node.js SDK 文档](./sdks/node/README.md)。本地开发：`pnpm install && pnpm test`；贡献规范见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+完整说明见 [Node.js SDK 文档](./sdks/node/README.md)；Python 用法见 [Python SDK 文档](./sdks/python/README.md)。本地开发：`pnpm install && pnpm test`；贡献规范见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 许可证
 

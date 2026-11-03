@@ -8,7 +8,8 @@ Thanks for helping! This repository hosts several SDKs that share one contract.
 | :--- | :--- |
 | `spec/` | Language-neutral contract: `behavior.md`, event JSON Schema, conformance fixtures. **Change the spec first**, then the SDKs. |
 | `sdks/node/` | TypeScript reference SDK (`gabriel-slack`) and the `gabriel` CLI. |
-| `sdks/go/`, `sdks/python/` | Future SDKs. |
+| `sdks/python/` | Python SDK (distribution `gabriel-slack`, import `gabriel`), asyncio, managed with `uv`. |
+| `sdks/go/` | Future SDK. |
 | `docs/` | Curated public docs: architecture overview (EN) and user guide (zh-CN). |
 | `scripts/` | `spec-check`, open-source export and leak check. |
 
@@ -23,8 +24,19 @@ pnpm spec:check
 pnpm oss:check
 ```
 
-Tests never touch a real workspace: `sdks/node/test/harness.ts` provides an in-memory Slack
-(Web API, EdgeAPI, cookie exchange and WebSocket gateway). Please add a test with every change.
+Python SDK (`uv` required):
+
+```bash
+cd sdks/python
+uv sync
+uv run pytest              # unit + fake-Slack integration + conformance fixtures + schema validation
+uv run mypy                # strict
+uv run ruff check src tests examples && uv run ruff format --check src tests examples
+```
+
+Tests never touch a real workspace: `sdks/node/test/harness.ts` and `sdks/python/tests/harness.py`
+provide an in-memory Slack (Web API, EdgeAPI, cookie exchange and WebSocket gateway). Please add a
+test with every change, in every SDK the change affects.
 
 ## Ground rules
 
@@ -47,7 +59,7 @@ Tests never touch a real workspace: `sdks/node/test/harness.ts` provides an in-m
 ## Adding a language SDK
 
 1. Create `sdks/<language>/` with its own README, build and test setup, using the language's
-   idioms (see the planned shapes in `sdks/go/README.md` and `sdks/python/README.md`).
+   idioms (see the planned shape in `sdks/go/README.md` and the Python SDK in `sdks/python`).
 2. Implement the low-level core first (credentials, HTTP, WebSocket state machine), then the
    high-level client, following `spec/behavior.md`.
 3. Load every file in `spec/fixtures/normalize/` in your test suite and assert the subset match
@@ -69,7 +81,7 @@ Each SDK is released from its own tag:
 | :--- | :--- | :--- |
 | Node.js (`gabriel-slack` on npm) | `node-v<version>` | `.github/workflows/release-node.yml` |
 | Go (planned) | `sdks/go/v<version>` (Go's rule for modules in subdirectories) | — |
-| Python (planned) | `python-v<version>` | — |
+| Python (`gabriel-slack` on PyPI) | `python-v<version>` | `.github/workflows/release-python.yml` |
 
 Node.js release steps:
 
@@ -89,6 +101,18 @@ reachable from `node-v*` tag runs.
 **After publishing:** npm runs an automated review on every new version. Until it finishes, the version
 shows as "Validating" on npmjs.com, cannot be installed yet, and `latest` keeps pointing at the previous
 version. This normally clears on its own; nothing needs to be re-run.
+
+Python release steps:
+
+1. Bump `version` in `sdks/python/pyproject.toml` (`uv version <version>` from `sdks/python`) and add a
+   `## [<version>]` section to `sdks/python/CHANGELOG.md`.
+2. Optional rehearsal: run the **release-python** workflow manually (builds and checks, never uploads).
+3. Tag and push: `git tag python-v<version> && git push origin python-v<version>`.
+4. The workflow verifies the tag matches the package version, runs every check, publishes to PyPI with
+   attestations and creates the GitHub release from the changelog section.
+
+**Authentication:** PyPI trusted publishing (OIDC) bound to this repository, the `release-python.yml`
+workflow and the `pypi` environment. No PyPI token is stored anywhere.
 
 ## Reporting security issues
 

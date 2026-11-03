@@ -212,5 +212,5 @@ event payloads stay identical.
 ## 13. Roadmap
 
 Planned, not yet implemented: a Redis-backed `StateStore` with multi-replica leases, a local daemon
-sharing one Slack connection between several agent processes, OpenTelemetry spans, and the Go and
-Python SDKs.
+sharing one Slack connection between several agent processes, OpenTelemetry spans, and the Go
+SDK. The Python SDK (`sdks/python`) implements the full contract.

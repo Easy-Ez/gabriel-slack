@@ -1,0 +1,69 @@
+[project]
+name = "gabriel-slack"
+version = "0.1.0"
+description = "Typed, AI-friendly real-time SDK for the Slack Web client protocol (session token + cookie)"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "EzEasy" }]
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27",
+  "websockets>=14",
+]
+keywords = ["slack", "realtime", "websocket", "sdk", "ai", "llm", "agent"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/Easy-Ez/gabriel-slack/tree/main/sdks/python#readme"
+Repository = "https://github.com/Easy-Ez/gabriel-slack"
+Issues = "https://github.com/Easy-Ez/gabriel-slack/issues"
+
+[project.scripts]
+gabriel = "gabriel.cli.main:main"
+
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gabriel"]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "jsonschema>=4.23",
+  "mypy>=1.13",
+  "ruff>=0.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "RUF", "SIM"]
+ignore = ["RUF001", "RUF002", "RUF003", "SIM105", "SIM108", "ASYNC109"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/gabriel"]
+warn_unreachable = false

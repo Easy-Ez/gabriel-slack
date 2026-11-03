@@ -1,0 +1,76 @@
+name: release-python
+
+# Publishes sdks/python to PyPI as `gabriel-slack`.
+#   - Real release: push a tag `python-v<version>` matching sdks/python/pyproject.toml.
+#   - Rehearsal: run manually (workflow_dispatch) — builds and checks, never uploads.
+# Authentication uses PyPI trusted publishing (OIDC) with attestations; no PyPI token is stored.
+
+on:
+  push:
+    tags: ["python-v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-python
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # The pypi environment is only reachable from python-v* tag runs.
+    environment: ${{ github.event_name == 'push' && 'pypi' || '' }}
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # PyPI trusted publishing + attestations
+    defaults:
+      run:
+        working-directory: sdks/python
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - run: uv run ruff check src tests examples
+      - run: uv run ruff format --check src tests examples
+      - run: uv run mypy
+      - run: uv run pytest -q
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Leak and spec checks
+        working-directory: .
+        run: node scripts/oss-leak-check.mjs && node scripts/spec-check.mjs
+
+      - name: Check tag matches package version
+        if: github.event_name == 'push'
+        run: |
+          expected="python-v$(uv version --short)"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package version ($expected)"
+            exit 1
+          fi
+
+      - run: uv build
+      - name: Check distribution metadata
+        run: uvx twine check --strict dist/*
+
+      - name: Publish to PyPI
+        if: github.event_name == 'push'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: sdks/python/dist
+
+      - name: Create GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#python-v}"
+          notes="$(awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {f=1; next} /^## \[/ {f=0} f' CHANGELOG.md)"
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "gabriel-slack $version (Python)" \
+            --notes "${notes:-See sdks/python/CHANGELOG.md}"
