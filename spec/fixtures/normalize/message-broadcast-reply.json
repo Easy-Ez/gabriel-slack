@@ -35,6 +35,9 @@
       "isReply": true,
       "broadcast": true
     },
+    "mentionReasons": [
+      "broadcast"
+    ],
     "isMentioningMe": true,
     "markdown": "@here fyi"
   }

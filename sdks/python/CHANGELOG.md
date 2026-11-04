@@ -6,6 +6,17 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `MessageCreatedEvent.mention_reasons`: why the message mentions you, as `"direct"` (you, by ID),
+  `"usergroup"` (a user group you belong to) and / or `"broadcast"` (`@here` / `@channel` /
+  `@everyone`), each at most once in that order; empty when it does not. `is_mentioning_me` is
+  unchanged and equals `len(mention_reasons) > 0`. To react only when you are named, use
+  `"direct" in evt.mention_reasons`.
+- `Mention.includes_me` for user group mentions: `True` / `False` when the SDK knows whether you
+  belong to the group (user group preload or membership events), `None` otherwise.
+- `MentionReason` type.
+
 ## [0.2.0] - 2026-11-03
 
 ### Added

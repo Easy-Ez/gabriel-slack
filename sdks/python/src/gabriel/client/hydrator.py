@@ -164,6 +164,8 @@ class Hydrator:
         self._logger = logger
         self._usergroups: dict[str, UsergroupRecord] = {}
         self.my_subteams: set[str] = set()
+        #: Groups whose membership is known (in ``my_subteams`` or not).
+        self._known_subteams: set[str] = set()
         #: message ts → thread root ts ("" = not in a thread)
         self._thread_roots: LruCache[str, str] = LruCache(20_000, 60 * 60.0)
 
@@ -268,6 +270,20 @@ class Hydrator:
             users=rec.users if rec.users is not None else prev.users,
         )
 
+    def set_subteam_membership(self, id: str, is_member: bool) -> None:
+        """Records whether I belong to a user group."""
+        self._known_subteams.add(id)
+        if is_member:
+            self.my_subteams.add(id)
+        else:
+            self.my_subteams.discard(id)
+
+    def subteam_membership(self, id: str) -> bool | None:
+        """Whether I belong to a user group; ``None`` when not known."""
+        if id in self.my_subteams:
+            return True
+        return False if id in self._known_subteams else None
+
     def record_thread_root(self, ts: str, root_ts: str | None) -> None:
         self._thread_roots.set(ts, root_ts or "")
 
@@ -287,8 +303,8 @@ class Hydrator:
                 self.upsert_usergroup(
                     UsergroupRecord(id=id, handle=_s(g.get("handle")) or "", name=_s(g.get("name")), users=users)
                 )
-                if users is not None and self_user_id in users:
-                    self.my_subteams.add(id)
+                if users is not None:
+                    self.set_subteam_membership(id, self_user_id in users)
         except Exception as err:
             self._logger.warn({"err": str(err)}, "usergroup preload failed; usergroup mentions may be incomplete")
 

@@ -1,0 +1,99 @@
+{
+  "description": "Every applicable reason is listed once, in the order direct, usergroup, broadcast",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "ts": "1800000033.000100",
+    "text": "<!here> <!subteam^S0ONCALL001|@oncall> <@U0SELF00001> <!here> deploy?",
+    "blocks": [
+      {
+        "type": "rich_text",
+        "elements": [
+          {
+            "type": "rich_text_section",
+            "elements": [
+              {
+                "type": "broadcast",
+                "range": "here"
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "usergroup",
+                "usergroup_id": "S0ONCALL001"
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "user",
+                "user_id": "U0SELF00001"
+              },
+              {
+                "type": "text",
+                "text": " "
+              },
+              {
+                "type": "broadcast",
+                "range": "here"
+              },
+              {
+                "type": "text",
+                "text": " deploy?"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "type": "message.created",
+    "markdown": "@here @oncall @Me @here deploy?",
+    "mentions": [
+      {
+        "kind": "broadcast",
+        "id": "here"
+      },
+      {
+        "kind": "usergroup",
+        "id": "S0ONCALL001",
+        "name": "oncall",
+        "includesMe": true
+      },
+      {
+        "kind": "user",
+        "id": "U0SELF00001",
+        "name": "Me"
+      }
+    ],
+    "mentionReasons": [
+      "direct",
+      "usergroup",
+      "broadcast"
+    ],
+    "isMentioningMe": true
+  }
+}

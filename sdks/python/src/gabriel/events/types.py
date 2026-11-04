@@ -21,6 +21,9 @@ MessageOrigin = Literal["this_client", "self_other_client", "other_user", "bot"]
 Presence = Literal["active", "away"]
 #: How an agent attribution line ends (spec/behavior.md §9.1).
 AttributionReview = Literal["confirmed", "unconfirmed", "hidden"]
+#: Why a message mentions me: ``direct`` (I am mentioned by ID), ``usergroup`` (a group I belong to)
+#: or ``broadcast`` (@here / @channel / @everyone). Keyword highlights never count.
+MentionReason = Literal["direct", "usergroup", "broadcast"]
 
 _NULLABLE = {"nullable": True}
 
@@ -102,6 +105,8 @@ class Mention(_Serializable):
     kind: Literal["user", "usergroup", "broadcast", "keyword"]
     id: str
     name: str | None = None
+    #: ``usergroup`` only: whether I belong to the group. ``None`` when the membership is unknown.
+    includes_me: bool | None = None
 
 
 @dataclass(kw_only=True, slots=True)
@@ -207,7 +212,11 @@ class MessageCreatedEvent(BaseEvent):
     thread: ThreadInfo | None = field(default=None, metadata=_NULLABLE)
     is_thread_reply: bool = False
     mentions: list[Mention] = field(default_factory=list)
-    #: Direct @me, a user group I belong to, or @here / @channel / @everyone.
+    #: Why the message mentions me, each reason once, in the order direct, usergroup, broadcast;
+    #: empty if it does not.
+    mention_reasons: list[MentionReason] = field(default_factory=list)
+    #: ``len(mention_reasons) > 0``: a direct @me, a user group I belong to, **or** @here / @channel /
+    #: @everyone. To react only when I am named, use ``"direct" in mention_reasons``.
     is_mentioning_me: bool = False
     files: list[FileRef] = field(default_factory=list)
     raw: Any = None
@@ -606,6 +615,7 @@ __all__ = [
     "LeaseExpiredEvent",
     "LoopDetectedEvent",
     "Mention",
+    "MentionReason",
     "MessageAttribution",
     "MessageCreatedEvent",
     "MessageDeletedEvent",

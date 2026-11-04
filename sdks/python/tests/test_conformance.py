@@ -7,6 +7,7 @@ event is also validated against spec/schema/events.schema.json.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ import jsonschema
 import pytest
 
 from gabriel.events.normalize import Draft, NormalizeContext, normalize_frame
+from gabriel.events.types import MessageCreatedEvent
 from gabriel.markdown.blocks_to_markdown import EntityResolver
 
 SPEC = Path(__file__).resolve().parents[3] / "spec"
@@ -211,3 +213,51 @@ def test_extra_events_match_schema(name: str, frame: dict[str, Any]) -> None:
     draft = _normalize(fx)
     assert draft is not None, name
     _validator().validate(_render(draft, fx))
+
+
+# --------------------------------------------------------------------------- mention reasons
+
+
+def _created(text: str, is_my_subteam: Callable[[str], bool | None] | None = None) -> MessageCreatedEvent:
+    frame = {"type": "message", "channel": "C0GENERAL01", "user": "U0ALICE0001", "ts": "1800000001.000100"}
+    frame["text"] = text
+    draft = normalize_frame(frame, NormalizeContext(self_user_id="U0SELF00001", is_my_subteam=is_my_subteam))
+    assert draft is not None
+    assert isinstance(draft.event, MessageCreatedEvent)
+    return draft.event
+
+
+@pytest.mark.parametrize(
+    ("text", "reasons"),
+    [
+        ("hello", []),
+        ("<@U0ALICE0001> hi", []),
+        ("<@U0SELF00001> hi", ["direct"]),
+        ("<!subteam^S0ONCALL001> hi", ["usergroup"]),
+        ("<!subteam^S0DESIGN001> hi", []),
+        ("<!here> <!everyone> hi", ["broadcast"]),
+        ("<!channel> <!subteam^S0ONCALL001> <@U0SELF00001>", ["direct", "usergroup", "broadcast"]),
+    ],
+)
+def test_mention_reasons(text: str, reasons: list[str]) -> None:
+    evt = _created(text, lambda sid: sid == "S0ONCALL001")
+    assert evt.mention_reasons == reasons
+    assert evt.is_mentioning_me is (len(reasons) > 0)
+
+
+def test_includes_me_only_on_usergroups_with_known_membership() -> None:
+    known = _created(
+        "<!subteam^S0ONCALL001> <!subteam^S0DESIGN001> <@U0SELF00001> <!here>", lambda sid: sid == "S0ONCALL001"
+    )
+    assert [m.to_dict() for m in known.mentions] == [
+        {"kind": "usergroup", "id": "S0ONCALL001", "includesMe": True},
+        {"kind": "usergroup", "id": "S0DESIGN001", "includesMe": False},
+        {"kind": "user", "id": "U0SELF00001"},
+        {"kind": "broadcast", "id": "here"},
+    ]
+    unknown = _created("<!subteam^S0ONCALL001> hi", lambda sid: False if sid == "S0DESIGN001" else None)
+    assert [m.to_dict() for m in unknown.mentions] == [{"kind": "usergroup", "id": "S0ONCALL001"}]
+    assert unknown.mention_reasons == []
+    pure = _created("<!subteam^S0ONCALL001> hi")
+    assert pure.mentions[0].includes_me is None
+    assert pure.is_mentioning_me is False

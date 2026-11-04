@@ -139,8 +139,16 @@ Every payload is plain JSON-serializable data (schema:
 Key fields of `message.created`: `ts`, `channel {id,name,isPrivate,isIm,isMpim}`,
 `sender {id,displayName,handle,isBot,isExternal}`, `origin`, `text` (raw mrkdwn),
 `markdown` (standard Markdown, mentions rendered as `@Name`), `thread {rootTs,isReply,broadcast} | null`,
-`isThreadReply`, `threadTs`, `mentions[]`, `isMentioningMe` (direct, your user groups, `@here`
-/ `@channel`), `files[]`, `delivery` (`realtime` | `backfill`), `raw`.
+`isThreadReply`, `threadTs`, `mentions[]`, `mentionReasons`, `isMentioningMe`, `files[]`,
+`delivery` (`realtime` | `backfill`), `raw`.
+
+**Mentions.** `mentionReasons` says why a message mentions you: `"direct"` (you, by ID),
+`"usergroup"` (a user group you belong to) and / or `"broadcast"` (`@here` / `@channel` /
+`@everyone`); it is empty otherwise. `isMentioningMe` (and the `mentionsMe` filter) is true for
+**any** of them, so `@here` counts. To react only when you are named, check
+`evt.mentionReasons.includes("direct")`. A user group entry in `mentions[]` carries
+`includesMe: true | false` once the SDK knows whether you are a member (from the user group
+preload or membership events); without that knowledge it is left out and the group does not count.
 
 **`origin`** distinguishes `this_client` (an echo of this SDK instance's own writes, dropped
 unless `loopGuard.includeSelfMessages`), `self_other_client` (your account from another

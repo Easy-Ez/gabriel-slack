@@ -50,7 +50,15 @@ export interface Mention {
   kind: "user" | "usergroup" | "broadcast" | "keyword";
   id: string;
   name?: string;
+  /** `usergroup` only: whether I belong to the group. Absent when the membership is unknown. */
+  includesMe?: boolean;
 }
+
+/**
+ * Why a message mentions me: `direct` (I am mentioned by ID), `usergroup` (a group I belong to)
+ * or `broadcast` (@here / @channel / @everyone). Keyword highlights never count.
+ */
+export type MentionReason = "direct" | "usergroup" | "broadcast";
 
 export interface ThreadInfo {
   rootTs: string;
@@ -76,7 +84,12 @@ export interface MessageCreatedEvent extends BaseEvent {
   isThreadReply: boolean;
   threadTs?: string;
   mentions: Mention[];
-  /** Direct @me, a user group I belong to, or @here / @channel / @everyone. */
+  /** Why the message mentions me, each reason once, in the order direct, usergroup, broadcast; empty if it does not. */
+  mentionReasons: MentionReason[];
+  /**
+   * `mentionReasons.length > 0`: a direct @me, a user group I belong to, **or** @here / @channel /
+   * @everyone. To react only when I am named, use `mentionReasons.includes("direct")`.
+   */
   isMentioningMe: boolean;
   files: FileRef[];
   /** Raw message subtype (`file_share`, `thread_broadcast`, `bot_message`, …) if any. */

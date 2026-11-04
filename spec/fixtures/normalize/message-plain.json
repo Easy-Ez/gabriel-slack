@@ -48,6 +48,7 @@
     "thread": null,
     "isThreadReply": false,
     "mentions": [],
+    "mentionReasons": [],
     "isMentioningMe": false,
     "files": []
   }

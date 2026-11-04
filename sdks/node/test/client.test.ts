@@ -40,8 +40,56 @@ describe("GabrielClient events", () => {
     expect(evt.channel.name).toBe("general");
     expect(evt.markdown).toBe("@oncall please look @Bob");
     expect(evt.isMentioningMe).toBe(true);
+    expect(evt.mentionReasons).toEqual(["usergroup"]);
+    expect(evt.mentions[0]).toEqual({ kind: "usergroup", id: "S0ONCALL001", name: "oncall", includesMe: true });
     expect(evt.toLLMContext()).toContain('<slack_message untrusted="true">');
     expect(JSON.parse(JSON.stringify(evt)).toLLMContext).toBeUndefined();
+  });
+
+  it("reports user group membership only once it is known", async () => {
+    const slack = new FakeSlack();
+    slack.on("usergroups.list", () => ({ ok: false, error: "missing_scope" }));
+    const { client } = await started(slack);
+    const got: MessageCreatedEvent[] = [];
+    client.on("message.created", (e) => void got.push(e));
+    const mention = (ts: string) => slack.socket.deliver(messageFrame({ text: "<!subteam^S0ONCALL001> look", ts, event_ts: ts }));
+
+    mention("1800000001.000001");
+    await until(() => got.length === 1);
+    expect(got[0]!.mentions[0]!.includesMe).toBeUndefined();
+    expect(got[0]!.mentionReasons).toEqual([]);
+    expect(got[0]!.isMentioningMe).toBe(false);
+
+    slack.socket.deliver({ type: "subteam_self_added", subteam_id: "S0ONCALL001" });
+    mention("1800000001.000002");
+    await until(() => got.length === 2);
+    expect(got[1]!.mentions[0]!.includesMe).toBe(true);
+    expect(got[1]!.mentionReasons).toEqual(["usergroup"]);
+
+    slack.socket.deliver({ type: "subteam_self_removed", subteam_id: "S0ONCALL001" });
+    mention("1800000001.000003");
+    await until(() => got.length === 3);
+    expect(got[2]!.mentions[0]!.includesMe).toBe(false);
+    expect(got[2]!.isMentioningMe).toBe(false);
+  });
+
+  it("marks preloaded groups without me as includesMe false", async () => {
+    const slack = new FakeSlack();
+    slack.on("usergroups.list", () => ({
+      ok: true,
+      usergroups: [
+        { id: "S0ONCALL001", handle: "oncall", users: ["U0BOB000001"] },
+        { id: "S0DESIGN001", handle: "design" },
+      ],
+    }));
+    const { client } = await started(slack);
+    const got: MessageCreatedEvent[] = [];
+    client.on("message.created", (e) => void got.push(e));
+    slack.socket.deliver(messageFrame({ text: "<!subteam^S0ONCALL001> <!subteam^S0DESIGN001> <!here>" }));
+    await until(() => got.length === 1);
+    expect(got[0]!.mentions.map((m) => m.includesMe)).toEqual([false, undefined, undefined]);
+    expect(got[0]!.mentionReasons).toEqual(["broadcast"]);
+    expect(got[0]!.isMentioningMe).toBe(true);
   });
 
   it("keeps per-channel dispatch order even when hydration finishes out of order", async () => {

@@ -163,7 +163,15 @@ Key fields of `MessageCreatedEvent`: `ts`, `channel` (`id`, `name`, `is_private`
 `is_mpim`), `sender` (`id`, `display_name`, `handle`, `is_bot`, `is_external`), `origin`, `text`
 (raw mrkdwn), `markdown` (standard Markdown, mentions rendered as `@Name`), `thread`
 (`root_ts`, `is_reply`, `broadcast` or `None`), `is_thread_reply`, `thread_ts`, `mentions`,
-`is_mentioning_me`, `files`, `delivery` (`realtime` | `backfill`), `raw`.
+`mention_reasons`, `is_mentioning_me`, `files`, `delivery` (`realtime` | `backfill`), `raw`.
+
+**Mentions.** `mention_reasons` says why a message mentions you: `"direct"` (you, by ID),
+`"usergroup"` (a user group you belong to) and / or `"broadcast"` (`@here` / `@channel` /
+`@everyone`); it is empty otherwise. `is_mentioning_me` (and the `mentions_me` filter) is true for
+**any** of them, so `@here` counts. To react only when you are named, check
+`"direct" in evt.mention_reasons`. A user group entry in `mentions` carries
+`includes_me=True | False` once the SDK knows whether you are a member (from the user group
+preload or membership events); without that knowledge it is `None` and the group does not count.
 
 **`origin`** distinguishes `this_client` (an echo of this SDK instance's own writes, dropped
 unless `LoopGuardOptions(include_self_messages=True)`), `self_other_client`, `other_user` and `bot`.

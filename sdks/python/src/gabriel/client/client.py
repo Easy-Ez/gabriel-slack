@@ -826,11 +826,11 @@ class GabrielClient:
 
         if t == "subteam_self_added":
             if is_subteam_id(frame.get("subteam_id")):
-                self._hydrator.my_subteams.add(frame["subteam_id"])
+                self._hydrator.set_subteam_membership(frame["subteam_id"], True)
             return
         if t == "subteam_self_removed":
             if is_subteam_id(frame.get("subteam_id")):
-                self._hydrator.my_subteams.discard(frame["subteam_id"])
+                self._hydrator.set_subteam_membership(frame["subteam_id"], False)
             return
         if t == "subteam_members_changed":
             self._on_subteam_members_changed(frame)
@@ -905,9 +905,9 @@ class GabrielClient:
         removed = {u for u in frame.get("removed_users") or [] if isinstance(u, str)}
         me = self.core.session.user_id
         if me in added:
-            self._hydrator.my_subteams.add(id)
+            self._hydrator.set_subteam_membership(id, True)
         if me in removed:
-            self._hydrator.my_subteams.discard(id)
+            self._hydrator.set_subteam_membership(id, False)
         rec = self._hydrator.usergroup(id)
         if rec is None or rec.users is None:
             return
@@ -938,7 +938,7 @@ class GabrielClient:
         return NormalizeContext(
             self_user_id=self.core.session.user_id,
             classify_origin=classify,
-            is_my_subteam=self._hydrator.my_subteams.__contains__,
+            is_my_subteam=self._hydrator.subteam_membership,
             delivery=delivery,
         )
 

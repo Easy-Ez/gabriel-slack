@@ -9,7 +9,7 @@ import type { StreamController } from "./stream.js";
 export interface MessageMatcher {
   /** Channel ID allow-list. */
   channel?: string | string[];
-  /** Equivalent to `evt.isMentioningMe === true`. */
+  /** Equivalent to `evt.isMentioningMe === true` (includes user groups and @here / @channel / @everyone). */
   mentionsMe?: boolean;
   /** Tested against `evt.markdown`. */
   pattern?: RegExp;

@@ -29,6 +29,7 @@ from .types import (
     FileRef,
     GabrielEvent,
     Mention,
+    MentionReason,
     MessageCreatedEvent,
     MessageDeletedEvent,
     MessageOrigin,
@@ -89,8 +90,8 @@ class NormalizeContext:
     self_user_id: str
     #: Classifies a message author; defaults to the stateless rules (no self-send registry).
     classify_origin: Callable[[OriginInfo], MessageOrigin] | None = None
-    #: Whether the current user belongs to the given user group.
-    is_my_subteam: Callable[[str], bool] | None = None
+    #: Whether the current user belongs to the given user group; ``None`` = membership unknown.
+    is_my_subteam: Callable[[str], bool | None] | None = None
     #: Recorded at receive time; defaults to ``"realtime"``.
     delivery: Delivery | None = None
 
@@ -449,6 +450,28 @@ def _render_channel_name(ref: ChannelRef, channel_id: str, r: EntityResolver) ->
 # --------------------------------------------------------------------------- message family
 
 
+_MENTION_REASONS: tuple[MentionReason, ...] = ("direct", "usergroup", "broadcast")
+
+
+def _mention_reasons_of(mentions: list[Mention], ctx: NormalizeContext) -> list[MentionReason]:
+    """Sets ``includes_me`` on usergroup mentions whose membership is known, and lists the reasons
+    the message mentions me."""
+    found: set[MentionReason] = set()
+    for m in mentions:
+        if m.kind == "user" and m.id == ctx.self_user_id:
+            found.add("direct")
+        elif m.kind == "broadcast":
+            found.add("broadcast")
+        elif m.kind == "usergroup" and ctx.is_my_subteam is not None:
+            includes_me = ctx.is_my_subteam(m.id)
+            if includes_me is None:
+                continue
+            m.includes_me = includes_me
+            if includes_me:
+                found.add("usergroup")
+    return [r for r in _MENTION_REASONS if r in found]
+
+
 def _normalize_message_created(frame: RawWsFrame, ctx: NormalizeContext) -> Draft | None:
     channel = _str(frame.get("channel"))
     ts = _str(frame.get("ts"))
@@ -459,13 +482,7 @@ def _normalize_message_created(frame: RawWsFrame, ctx: NormalizeContext) -> Draf
     text = raw_text if isinstance(raw_text, str) else ""
     mentions = extract_mentions(split_attribution(frame.get("blocks"))[1], text)
     thread = _thread_of(frame, ts, subtype)
-    is_my_subteam = ctx.is_my_subteam if ctx.is_my_subteam is not None else (lambda _id: False)
-    is_mentioning_me = any(
-        (m.kind == "user" and m.id == ctx.self_user_id)
-        or m.kind == "broadcast"
-        or (m.kind == "usergroup" and is_my_subteam(m.id))
-        for m in mentions
-    )
+    mention_reasons = _mention_reasons_of(mentions, ctx)
     evt = MessageCreatedEvent(
         event_id=f"{channel}:{ts}:created",
         ts=ts,
@@ -480,7 +497,8 @@ def _normalize_message_created(frame: RawWsFrame, ctx: NormalizeContext) -> Draf
         is_thread_reply=thread is not None and thread.is_reply,
         thread_ts=thread.root_ts if thread is not None else None,
         mentions=mentions,
-        is_mentioning_me=is_mentioning_me,
+        mention_reasons=mention_reasons,
+        is_mentioning_me=len(mention_reasons) > 0,
         files=to_file_refs(frame.get("files")),
         subtype=subtype,
         raw=frame,

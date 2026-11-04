@@ -26,7 +26,7 @@
 | 能力 | 入口 | 说明 |
 | :--- | :--- | :--- |
 | 实时事件 | `client.on()` / `client.onMessage()` / `client.events()` | 消息、编辑、删除、线程、表情、正在输入、上下线、自定义状态、勿扰、未读角标、连接健康；同频道严格有序，自带实名与标准 Markdown |
-| 被 `@` 识别 | `evt.isMentioningMe` | 覆盖直接 `@我`、我所在的用户组、`@here` / `@channel` / `@everyone` |
+| 被 `@` 识别 | `evt.mentionReasons` / `evt.isMentioningMe` | 区分直接 `@我`、我所在的用户组、`@here` / `@channel` / `@everyone`；只关心点名我本人时用 `mentionReasons.includes("direct")` |
 | 发送 / 编辑 / 删除 | `client.chat.*` | Markdown 输入，超长自动拆分，网络抖动重试不重复发 |
 | LLM 流式回复 | `ctx.replyStream()` / `client.chat.createStream()` | 打字机效果；对方在 Slack 里删掉回复时自动取消生成 |
 | 线程上下文 | `client.threads.getContext()` | 传根消息或任意子回复的 `ts`，拿到整条线程和给 LLM 用的文字记录 |
@@ -139,7 +139,9 @@ for await (const evt of client.events()) {}                               // 拉
 | `ts`、`channel`、`sender` | 消息 ID、频道（含 `name`、`isPrivate`、`isIm`）、发送者（含 `displayName`、`isBot`、`isExternal`） |
 | `text` / `markdown` | Slack 原始 mrkdwn / 标准 Markdown（提及已渲染成 `@名字`） |
 | `thread`、`isThreadReply`、`threadTs` | 线程信息；频道主消息 `thread === null` |
-| `mentions`、`isMentioningMe` | 提及列表；是否提及我（含我所在用户组和 `@here`） |
+| `mentions` | 提及列表；用户组提及在已知我是否为成员时带 `includesMe: true / false`，不知道时不带 |
+| `mentionReasons` | 提及我的原因：`"direct"`（直接 `@我`）、`"usergroup"`（我所在的用户组）、`"broadcast"`（`@here` / `@channel` / `@everyone`）；没提及我时为空数组 |
+| `isMentioningMe` | 等于 `mentionReasons.length > 0`，所以 `@here` 也算；只想在被点名时响应，用 `mentionReasons.includes("direct")` |
 | `files` | 附件列表 |
 | `origin` | 来源，见下表 |
 | `delivery` | `realtime` 或 `backfill`（断线 / 重启后补回的历史消息） |

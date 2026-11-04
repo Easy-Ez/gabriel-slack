@@ -9,6 +9,7 @@ import type {
   FileRef,
   GabrielEvent,
   Mention,
+  MentionReason,
   MessageCreatedEvent,
   MessageDeletedEvent,
   MessageOrigin,
@@ -27,8 +28,8 @@ export interface NormalizeContext {
   selfUserId: string;
   /** Classifies a message author; defaults to the stateless rules (no self-send registry). */
   classifyOrigin?(info: { user?: string; botId?: string; clientMsgId?: string; ts: string; contentHash: string; isEdit: boolean }): MessageOrigin;
-  /** Whether the current user belongs to the given user group. */
-  isMySubteam?(subteamId: string): boolean;
+  /** Whether the current user belongs to the given user group; `undefined` = membership unknown. */
+  isMySubteam?(subteamId: string): boolean | undefined;
   /** Recorded at receive time; defaults to "realtime". */
   delivery?: "realtime" | "backfill";
 }
@@ -234,6 +235,24 @@ function userRefFromResolver(id: string, r: EntityResolver) {
   return displayName ? { id, displayName } : { id };
 }
 
+/** Sets `includesMe` on usergroup mentions whose membership is known, and lists the reasons the message mentions me. */
+function mentionReasonsOf(mentions: Mention[], ctx: NormalizeContext): MentionReason[] {
+  const found = new Set<MentionReason>();
+  for (const m of mentions) {
+    if (m.kind === "user" && m.id === ctx.selfUserId) found.add("direct");
+    else if (m.kind === "broadcast") found.add("broadcast");
+    else if (m.kind === "usergroup") {
+      const includesMe = ctx.isMySubteam?.(m.id);
+      if (includesMe === undefined) continue;
+      m.includesMe = includesMe;
+      if (includesMe) found.add("usergroup");
+    }
+  }
+  return MENTION_REASONS.filter((r) => found.has(r));
+}
+
+const MENTION_REASONS: readonly MentionReason[] = ["direct", "usergroup", "broadcast"];
+
 function normalizeMessageCreated(frame: RawWsFrame, ctx: NormalizeContext): Draft | null {
   const channel = str(frame.channel);
   const ts = str(frame.ts);
@@ -242,10 +261,7 @@ function normalizeMessageCreated(frame: RawWsFrame, ctx: NormalizeContext): Draf
   const text = typeof frame.text === "string" ? frame.text : "";
   const mentions = extractMentions(splitAttribution(frame.blocks).rest, text);
   const thread = threadOf(frame, ts, subtype);
-  const isMySubteam = ctx.isMySubteam ?? (() => false);
-  const isMentioningMe = mentions.some(
-    (m) => (m.kind === "user" && m.id === ctx.selfUserId) || m.kind === "broadcast" || (m.kind === "usergroup" && isMySubteam(m.id)),
-  );
+  const mentionReasons = mentionReasonsOf(mentions, ctx);
   const clientMsgId = str(frame.client_msg_id);
   const evt = {
     type: "message.created",
@@ -262,7 +278,8 @@ function normalizeMessageCreated(frame: RawWsFrame, ctx: NormalizeContext): Draf
     isThreadReply: thread?.isReply === true,
     ...(thread ? { threadTs: thread.rootTs } : {}),
     mentions,
-    isMentioningMe,
+    mentionReasons,
+    isMentioningMe: mentionReasons.length > 0,
     files: toFileRefs(frame.files),
     ...(subtype ? { subtype } : {}),
     raw: frame,
