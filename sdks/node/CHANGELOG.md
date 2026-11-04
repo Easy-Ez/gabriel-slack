@@ -6,6 +6,8 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
 ### Added
 - `message.created` has `mentionReasons`: why the message mentions you, as `"direct"` (you, by ID),
   `"usergroup"` (a user group you belong to) and / or `"broadcast"` (`@here` / `@channel` /

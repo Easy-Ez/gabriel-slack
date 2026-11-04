@@ -6,6 +6,8 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-04
+
 ### Added
 
 - `MessageCreatedEvent.mention_reasons`: why the message mentions you, as `"direct"` (you, by ID),
