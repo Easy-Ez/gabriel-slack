@@ -97,8 +97,61 @@ async def test_hydrated_message_created_mentions_me_via_user_group(started: Star
     assert evt.channel.name == "general"
     assert evt.markdown == "@oncall please look @Bob"
     assert evt.is_mentioning_me is True
+    assert evt.mention_reasons == ["usergroup"]
+    assert evt.mentions[0].to_dict() == {"kind": "usergroup", "id": "S0ONCALL001", "name": "oncall", "includesMe": True}
     assert '<slack_message untrusted="true">' in evt.to_llm_context()
     assert "toLLMContext" not in json.loads(evt.to_json())
+
+
+async def test_reports_user_group_membership_only_once_known(started: Started) -> None:
+    slack = FakeSlack()
+    slack.on("usergroups.list", lambda _f, _n: {"ok": False, "error": "missing_scope"})
+    _, client = await started(slack)
+    got: list[MessageCreatedEvent] = []
+    client.on(MessageCreatedEvent, lambda e, _ctx: got.append(e))
+
+    def mention(ts: str) -> None:
+        slack.socket.deliver(message_frame(text="<!subteam^S0ONCALL001> look", ts=ts, event_ts=ts))
+
+    mention("1800000001.000001")
+    await until(lambda: len(got) == 1)
+    assert got[0].mentions[0].includes_me is None
+    assert got[0].mention_reasons == []
+    assert got[0].is_mentioning_me is False
+
+    slack.socket.deliver({"type": "subteam_self_added", "subteam_id": "S0ONCALL001"})
+    mention("1800000001.000002")
+    await until(lambda: len(got) == 2)
+    assert got[1].mentions[0].includes_me is True
+    assert got[1].mention_reasons == ["usergroup"]
+
+    slack.socket.deliver({"type": "subteam_self_removed", "subteam_id": "S0ONCALL001"})
+    mention("1800000001.000003")
+    await until(lambda: len(got) == 3)
+    assert got[2].mentions[0].includes_me is False
+    assert got[2].is_mentioning_me is False
+
+
+async def test_marks_preloaded_groups_without_me_as_includes_me_false(started: Started) -> None:
+    slack = FakeSlack()
+    slack.on(
+        "usergroups.list",
+        lambda _f, _n: {
+            "ok": True,
+            "usergroups": [
+                {"id": "S0ONCALL001", "handle": "oncall", "users": ["U0BOB000001"]},
+                {"id": "S0DESIGN001", "handle": "design"},
+            ],
+        },
+    )
+    _, client = await started(slack)
+    got: list[MessageCreatedEvent] = []
+    client.on(MessageCreatedEvent, lambda e, _ctx: got.append(e))
+    slack.socket.deliver(message_frame(text="<!subteam^S0ONCALL001> <!subteam^S0DESIGN001> <!here>"))
+    await until(lambda: len(got) == 1)
+    assert [m.includes_me for m in got[0].mentions] == [False, None, None]
+    assert got[0].mention_reasons == ["broadcast"]
+    assert got[0].is_mentioning_me is True
 
 
 async def test_per_channel_order_even_when_hydration_finishes_out_of_order(started: Started) -> None:

@@ -1,0 +1,42 @@
+{
+  "description": "@channel mentions everyone, including the current user, as a broadcast reason",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "<!channel> standup in 5",
+    "ts": "1800000031.000100"
+  },
+  "expected": {
+    "type": "message.created",
+    "markdown": "@channel standup in 5",
+    "mentions": [
+      {
+        "kind": "broadcast",
+        "id": "channel"
+      }
+    ],
+    "mentionReasons": [
+      "broadcast"
+    ],
+    "isMentioningMe": true
+  }
+}

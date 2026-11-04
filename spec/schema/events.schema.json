@@ -217,6 +217,10 @@
         },
         "name": {
           "type": "string"
+        },
+        "includesMe": {
+          "type": "boolean",
+          "description": "usergroup mentions only: whether the signed-in user belongs to the group. Absent when the membership is unknown."
         }
       },
       "required": [
@@ -224,6 +228,13 @@
         "id"
       ],
       "additionalProperties": false
+    },
+    "MentionReason": {
+      "enum": [
+        "direct",
+        "usergroup",
+        "broadcast"
+      ]
     },
     "Attribution": {
       "type": "object",
@@ -363,8 +374,17 @@
             "$ref": "#/$defs/Mention"
           }
         },
+        "mentionReasons": {
+          "type": "array",
+          "description": "Why the message mentions the signed-in user (spec/behavior.md §6.4); empty when it does not.",
+          "items": {
+            "$ref": "#/$defs/MentionReason"
+          },
+          "uniqueItems": true
+        },
         "isMentioningMe": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "mentionReasons.length > 0: a direct mention, a user group I belong to, or @here / @channel / @everyone."
         },
         "files": {
           "type": "array",
@@ -390,6 +410,7 @@
         "thread",
         "isThreadReply",
         "mentions",
+        "mentionReasons",
         "isMentioningMe",
         "files",
         "raw"

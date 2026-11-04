@@ -64,6 +64,9 @@
         "name": "Me"
       }
     ],
+    "mentionReasons": [
+      "direct"
+    ],
     "isMentioningMe": true
   }
 }

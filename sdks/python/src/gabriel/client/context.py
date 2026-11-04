@@ -33,7 +33,8 @@ MessagePredicate = Callable[[MessageCreatedEvent], bool]
 class MessageMatcher:
     #: Channel ID allow-list.
     channel: str | Sequence[str] | None = None
-    #: Equivalent to ``evt.is_mentioning_me is True`` (False requires not mentioning me).
+    #: Equivalent to ``evt.is_mentioning_me is True`` (False requires not mentioning me). Includes user
+    #: groups and @here / @channel / @everyone; see ``evt.mention_reasons``.
     mentions_me: bool | None = None
     #: Tested (``search``) against ``evt.markdown``.
     pattern: re.Pattern[str] | str | None = None

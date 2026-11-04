@@ -94,6 +94,8 @@ export class Hydrator {
   private readonly ims: BatchLoader<ChannelRecord>;
   private readonly usergroups = new Map<string, UsergroupRecord>();
   readonly mySubteams = new Set<string>();
+  /** Groups whose membership is known (in `mySubteams` or not). */
+  private readonly knownSubteams = new Set<string>();
   /** message ts → thread root ts (null = not in a thread) */
   private readonly threadRoots = new LruCache<string, string | null>(20_000, 60 * 60_000);
 
@@ -184,6 +186,19 @@ export class Hydrator {
     this.usergroups.set(rec.id, { ...prev, ...rec });
   }
 
+  /** Records whether I belong to a user group. */
+  setSubteamMembership(id: string, isMember: boolean): void {
+    this.knownSubteams.add(id);
+    if (isMember) this.mySubteams.add(id);
+    else this.mySubteams.delete(id);
+  }
+
+  /** Whether I belong to a user group; `undefined` when not known. */
+  subteamMembership(id: string): boolean | undefined {
+    if (this.mySubteams.has(id)) return true;
+    return this.knownSubteams.has(id) ? false : undefined;
+  }
+
   recordThreadRoot(ts: string, rootTs: string | null): void {
     this.threadRoots.set(ts, rootTs);
   }
@@ -197,7 +212,7 @@ export class Hydrator {
         if (!id) continue;
         const users = Array.isArray(g.users) ? (g.users as unknown[]).filter((u): u is string => typeof u === "string") : undefined;
         this.upsertUsergroup({ id, handle: s(g.handle) ?? "", ...(s(g.name) ? { name: s(g.name)! } : {}), ...(users ? { users } : {}) });
-        if (users?.includes(selfUserId)) this.mySubteams.add(id);
+        if (users) this.setSubteamMembership(id, users.includes(selfUserId));
       }
     } catch (err) {
       this.logger.warn({ err: String(err) }, "usergroup preload failed; usergroup mentions may be incomplete");

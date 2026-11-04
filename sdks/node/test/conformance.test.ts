@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { normalizeFrame } from "../src/events/normalize.js";
+import type { MessageCreatedEvent } from "../src/events/types.js";
 
 /**
  * Language-neutral conformance fixtures shared by every SDK: raw frame → normalized
@@ -44,4 +45,43 @@ describe("conformance: normalize", () => {
       expect(payload).toMatchObject(fx.expected);
     });
   }
+});
+
+describe("mention reasons", () => {
+  const frame = { type: "message", channel: "C0GENERAL01", user: "U0ALICE0001", ts: "1800000001.000100" };
+  const created = (text: string, isMySubteam?: (id: string) => boolean | undefined) =>
+    normalizeFrame({ ...frame, text }, { selfUserId: "U0SELF00001", ...(isMySubteam ? { isMySubteam } : {}) })!.event as MessageCreatedEvent;
+
+  it("lists each reason once and keeps isMentioningMe in step", () => {
+    const cases: Array<[string, string[]]> = [
+      ["hello", []],
+      ["<@U0ALICE0001> hi", []],
+      ["<@U0SELF00001> hi", ["direct"]],
+      ["<!subteam^S0ONCALL001> hi", ["usergroup"]],
+      ["<!subteam^S0DESIGN001> hi", []],
+      ["<!here> <!everyone> hi", ["broadcast"]],
+      ["<!channel> <!subteam^S0ONCALL001> <@U0SELF00001>", ["direct", "usergroup", "broadcast"]],
+    ];
+    for (const [text, reasons] of cases) {
+      const evt = created(text, (id) => id === "S0ONCALL001");
+      expect(evt.mentionReasons, text).toEqual(reasons);
+      expect(evt.isMentioningMe, text).toBe(reasons.length > 0);
+    }
+  });
+
+  it("sets includesMe only on usergroup mentions with a known membership", () => {
+    const known = created("<!subteam^S0ONCALL001> <!subteam^S0DESIGN001> <@U0SELF00001> <!here>", (id) => id === "S0ONCALL001");
+    expect(known.mentions).toEqual([
+      { kind: "usergroup", id: "S0ONCALL001", includesMe: true },
+      { kind: "usergroup", id: "S0DESIGN001", includesMe: false },
+      { kind: "user", id: "U0SELF00001" },
+      { kind: "broadcast", id: "here" },
+    ]);
+    const unknown = created("<!subteam^S0ONCALL001> hi", (id) => (id === "S0DESIGN001" ? false : undefined));
+    expect(unknown.mentions).toEqual([{ kind: "usergroup", id: "S0ONCALL001" }]);
+    expect(unknown.mentionReasons).toEqual([]);
+    const pure = created("<!subteam^S0ONCALL001> hi");
+    expect(pure.mentions).toEqual([{ kind: "usergroup", id: "S0ONCALL001" }]);
+    expect(pure.isMentioningMe).toBe(false);
+  });
 });

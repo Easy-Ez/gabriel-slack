@@ -1,0 +1,48 @@
+{
+  "description": "Mentioning the current user by ID is a direct reason; other users do not count",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "<@U0SELF00001> and <@U0ALICE0001> please review",
+    "ts": "1800000030.000100"
+  },
+  "expected": {
+    "type": "message.created",
+    "markdown": "@Me and @Alice please review",
+    "mentions": [
+      {
+        "kind": "user",
+        "id": "U0SELF00001",
+        "name": "Me"
+      },
+      {
+        "kind": "user",
+        "id": "U0ALICE0001",
+        "name": "Alice"
+      }
+    ],
+    "mentionReasons": [
+      "direct"
+    ],
+    "isMentioningMe": true
+  }
+}

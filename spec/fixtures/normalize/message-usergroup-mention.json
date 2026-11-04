@@ -32,8 +32,12 @@
       {
         "kind": "usergroup",
         "id": "S0ONCALL001",
-        "name": "oncall"
+        "name": "oncall",
+        "includesMe": true
       }
+    ],
+    "mentionReasons": [
+      "usergroup"
     ],
     "isMentioningMe": true
   }

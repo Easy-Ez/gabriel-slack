@@ -450,10 +450,10 @@ export class GabrielClient {
 
     switch (type) {
       case "subteam_self_added":
-        if (isSubteamId(frame.subteam_id)) this.hydrator.mySubteams.add(frame.subteam_id);
+        if (isSubteamId(frame.subteam_id)) this.hydrator.setSubteamMembership(frame.subteam_id, true);
         return;
       case "subteam_self_removed":
-        if (isSubteamId(frame.subteam_id)) this.hydrator.mySubteams.delete(frame.subteam_id);
+        if (isSubteamId(frame.subteam_id)) this.hydrator.setSubteamMembership(frame.subteam_id, false);
         return;
       case "subteam_members_changed":
         this.onSubteamMembersChanged(frame);
@@ -526,8 +526,8 @@ export class GabrielClient {
     const added = Array.isArray(frame.added_users) ? (frame.added_users as string[]) : [];
     const removed = new Set(Array.isArray(frame.removed_users) ? (frame.removed_users as string[]) : []);
     const self = this.core.session.userId;
-    if (added.includes(self)) this.hydrator.mySubteams.add(id);
-    if (removed.has(self)) this.hydrator.mySubteams.delete(id);
+    if (added.includes(self)) this.hydrator.setSubteamMembership(id, true);
+    if (removed.has(self)) this.hydrator.setSubteamMembership(id, false);
     const rec = this.hydrator.usergroup(id);
     if (!rec?.users) return;
     const users = [...rec.users.filter((u) => !removed.has(u)), ...added.filter((u) => !rec.users!.includes(u))];
@@ -542,7 +542,7 @@ export class GabrielClient {
     return {
       selfUserId: this.core.session.userId,
       classifyOrigin: (info: Parameters<SelfRegistry["classify"]>[0]) => this.registry.classify(info),
-      isMySubteam: (id: string) => this.hydrator.mySubteams.has(id),
+      isMySubteam: (id: string) => this.hydrator.subteamMembership(id),
       delivery,
     };
   }

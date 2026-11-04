@@ -145,8 +145,27 @@ and stay available as raw frames.
 `markdown` is produced from `blocks` when present (rich text sections, lists, quotes,
 preformatted with language, headers, sections, context, tables), else from mrkdwn entities
 (`<@U…>`, `<#C…|name>`, `<!here>`, `<!subteam^S…>`, `<url|label>`), plus legacy
-attachments. `isMentioningMe` is true for a direct mention of the user, a mention of a user
-group the user belongs to, or `@here` / `@channel` / `@everyone`.
+attachments.
+
+`message.created.mentionReasons` lists why the message mentions the user, each reason at most
+once and in this order:
+
+| Reason | When |
+| :--- | :--- |
+| `direct` | a `user` mention whose ID is the signed-in user |
+| `usergroup` | a `usergroup` mention of a group the user is known to belong to |
+| `broadcast` | `@here`, `@channel` or `@everyone` |
+
+It is empty when the message does not mention the user. Keyword highlights never count.
+`isMentioningMe` is `mentionReasons.length > 0`, so it is also true for user groups and
+broadcasts; consumers that only care about the user being named use
+`mentionReasons.includes("direct")`.
+
+A `usergroup` mention carries `includesMe` (`true` / `false`) when the client knows the user's
+membership of that group (from the user group preload, `subteam_self_added` /
+`subteam_self_removed`, or a `subteam_members_changed` that adds or removes the user). When the
+membership is unknown, `includesMe` is absent and the group does not count as a `usergroup`
+reason.
 
 When the first block is an attribution block (§9.1), it is removed before rendering and
 mention extraction, and exposed as `attribution: { text, review? }` on `message.created`,
