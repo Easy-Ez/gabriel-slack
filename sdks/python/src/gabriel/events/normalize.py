@@ -453,7 +453,7 @@ def _render_channel_name(ref: ChannelRef, channel_id: str, r: EntityResolver) ->
 _MENTION_REASONS: tuple[MentionReason, ...] = ("direct", "usergroup", "broadcast")
 
 
-def _mention_reasons_of(mentions: list[Mention], ctx: NormalizeContext) -> list[MentionReason]:
+def mention_reasons_of(mentions: list[Mention], ctx: NormalizeContext) -> list[MentionReason]:
     """Sets ``includes_me`` on usergroup mentions whose membership is known, and lists the reasons
     the message mentions me."""
     found: set[MentionReason] = set()
@@ -482,7 +482,7 @@ def _normalize_message_created(frame: RawWsFrame, ctx: NormalizeContext) -> Draf
     text = raw_text if isinstance(raw_text, str) else ""
     mentions = extract_mentions(split_attribution(frame.get("blocks"))[1], text)
     thread = _thread_of(frame, ts, subtype)
-    mention_reasons = _mention_reasons_of(mentions, ctx)
+    mention_reasons = mention_reasons_of(mentions, ctx)
     evt = MessageCreatedEvent(
         event_id=f"{channel}:{ts}:created",
         ts=ts,

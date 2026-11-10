@@ -188,7 +188,8 @@ client.on("message.created", async (evt, ctx) => {
 | `client.presence` | `watch(userIds, { trackProfileAndDnd })`、`getStatus(userId)` |
 | `client.reactions` | `add`、`remove`（重复添加 / 移除不报错） |
 | `client.users` | `resolve(id \| ids)`、`getDnd` |
-| `client.channels` | `resolve`、`getHistory`、`iterateHistory` |
+| `client.channels` | `resolve`、`getHistory`、`iterateHistory`、`getMessages({ channel, timestamps })`、`listDirect` / `iterateDirect({ activeSince })`（我的私信与群聊及其最近活动时间） |
+| `client.activity` | `list({ types, limit, cursor, unreadOnly })`、`iterate({ types, since })`：活动流（提及、私信、线程回复、表情回应），每一项解析为完整消息 |
 
 **发送时 SDK 已经替你处理的事：**
 

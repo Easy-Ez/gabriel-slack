@@ -161,6 +161,11 @@ export class Hydrator {
     usergroupHandle: (id) => this.usergroups.get(id)?.handle || undefined,
   };
 
+  /** The signed-in user's ID (empty before the session is established). */
+  get selfUserId(): string {
+    return this.core.session.userId;
+  }
+
   peekChannel(id: string): ChannelRecord | undefined {
     return (id.startsWith("D") ? this.ims.peek(id) : this.channels.peek(id)) ?? undefined;
   }

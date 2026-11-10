@@ -186,7 +186,22 @@ Middleware wraps every handler: `client.use(async (evt, ctx, next) => { …; awa
 | `client.presence` | `watch(userIds, { trackProfileAndDnd })` → handle (`unsubscribe()` / `await using`), `getStatus(userId)` |
 | `client.reactions` | `add`, `remove` (idempotent) |
 | `client.users` | `resolve(id \| ids)` (batched, cached, misses cached 10 min), `getDnd` |
-| `client.channels` | `resolve`, `getHistory`, `iterateHistory` |
+| `client.channels` | `resolve`, `getHistory`, `iterateHistory`, `getMessages({ channel, timestamps })`, `listDirect` / `iterateDirect({ activeSince })` (my 1:1 and group DMs with their latest activity) |
+| `client.activity` | `list({ types, limit, cursor, unreadOnly })`, `iterate({ types, since })`: the Activity feed (mentions, DMs, thread replies, reactions), each entry resolved to its full message |
+
+Reading what reached you recently (read-only: nothing is marked read):
+
+```ts
+const since = String(Math.floor(Date.now() / 1000) - 30 * 86400) + ".000000";
+for await (const item of client.activity.iterate({ types: ["at_user"], since })) {
+  if (item.message) console.log(item.channel?.name, item.message.sender.displayName, item.message.mentionReasons);
+}
+for await (const dm of client.channels.iterateDirect({ activeSince: since })) {
+  for await (const msg of client.channels.iterateHistory({ channel: dm.channel.id, oldest: since })) {
+    if (!msg.subtype && !msg.isDeleted) console.log(dm.channel.name, msg.ts);
+  }
+}
+```
 
 Sending behavior:
 

@@ -8,6 +8,10 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .cli.session_store import SessionCookie, load_session_cookie
 from .client.apis import (
+    ActivityItem,
+    ActivityPage,
+    DirectConversation,
+    DirectPage,
     FileInfo,
     HistoryMessage,
     HistoryPage,
@@ -109,6 +113,10 @@ __all__ = [
     "GabrielErrorCode",
     "HealthReport",
     "HistoryMessage",
+    "ActivityItem",
+    "ActivityPage",
+    "DirectConversation",
+    "DirectPage",
     "HistoryPage",
     "HydrationOptions",
     "Logger",

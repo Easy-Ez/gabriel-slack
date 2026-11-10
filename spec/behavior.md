@@ -283,10 +283,32 @@ default and is a self-declared display hint: any client can write the same block
 * Fast reconnect: become ready immediately, then reconcile once after **2 s** the same way.
 * `connection.gap.recovered === false` lists every unrecovered range with a reason.
 
+### 10.1 Reading past messages
+
+Besides history and thread replies, the SDK reads three client endpoints. None of them marks
+anything read, opens or closes a conversation, or writes in any other way.
+
+* Direct conversations: `client.dms` (`count` ≤ 250, `include_closed`, `include_channel=true`,
+  `exclude_bots=false`, `cursor`). Each entry yields the conversation (`isIm` / `isMpim`, the peer
+  of a 1:1 DM), the timestamp of its newest message when reported, and whether it is open.
+* Activity feed: `activity.feed` (`types` comma-separated, `limit` ≤ 50, `cursor`,
+  `mode=chrono_reads_and_unreads`, or `chrono_unreads` with `unread_only=true`). Entries carry a
+  key, a type (`at_user`, `at_user_group`, `at_channel`, `at_everyone`, `keyword`, `dm`,
+  `thread_v2`, `message_reaction`, …), a feed timestamp, an unread flag and at most a pointer to a
+  message (channel, ts, thread ts), never its content. Iteration is newest first, de-duplicated by
+  key, and stops at the first entry older than the requested lower bound.
+* Messages by timestamp: `messages.list` (`message_ids = [{ channel, timestamps }]`,
+  `org_wide_aware=true`), at most **50** messages per call. Activity entries are resolved to
+  full messages this way; an entry whose message no longer exists is kept without a message.
+
+History, thread, activity and search messages carry `mentions` and `mentionReasons` computed by
+the rules of §6.4. History messages also carry the raw `subtype` and a deletion flag.
+
 ## 11. Sandbox
 
 `scope(policy)` returns a view with the same API where reads are limited to allow-listed
-channels (history, thread context, file downloads, search hits), search can be disabled,
+channels (history, thread context, messages by timestamp, direct conversations, activity
+entries, file downloads, search hits), search can be disabled,
 download size capped, writes limited to an action allow-list and — with
 `trigger_thread_only` — to the channel and thread of the running handler's trigger, an
 optional disclosure suffix is appended to written content, and an approval hook is consulted

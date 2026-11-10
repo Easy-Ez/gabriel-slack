@@ -1,7 +1,7 @@
 import { GabrielError } from "../errors.js";
 import type { ChannelRef, DndInfo, UserRef } from "../events/types.js";
 import type { Logger } from "../util/logger.js";
-import type { ChannelsApi, FileInfo, FilesApi, HistoryMessage, ReactionsApi, SearchApi, SearchMessageHit, SearchOptions, SearchPage, ThreadContext, ThreadMessage, ThreadsApi, UploadOptions, UsersApi } from "./apis.js";
+import type { ActivityApi, ActivityItem, ActivityType, ChannelsApi, DirectConversation, FileInfo, FilesApi, HistoryMessage, ReactionsApi, SearchApi, SearchMessageHit, SearchOptions, SearchPage, ThreadContext, ThreadMessage, ThreadsApi, UploadOptions, UsersApi } from "./apis.js";
 import type { ChatApi, CreateStreamOptions, SendOptions, SendResult, UpdateOptions } from "./chat.js";
 import { currentTrigger } from "./context.js";
 import type { SelfRegistry } from "./origin.js";
@@ -20,7 +20,7 @@ export type ScopedWriteAction =
 
 export interface ScopePolicy {
   read?: {
-    /** Readable channel allow-list (history, thread context, file downloads, search hits). */
+    /** Readable channel allow-list (history, thread context, file downloads, search hits, direct conversations, activity). */
     channels?: string[];
     allowSearch?: boolean;
     maxFileDownloadBytes?: number;
@@ -91,14 +91,21 @@ export class ScopedClient {
   readonly channels: {
     resolve(id: string): Promise<ChannelRef | null>;
     resolve(ids: string[]): Promise<Array<ChannelRef | null>>;
-    getHistory(opts: { channel: string; limit?: number; oldest?: string; latest?: string; cursor?: string }): Promise<{ messages: HistoryMessage[]; hasMore: boolean; nextCursor?: string }>;
+    getHistory(opts: { channel: string; limit?: number; oldest?: string; latest?: string; cursor?: string; inclusive?: boolean }): Promise<{ messages: HistoryMessage[]; hasMore: boolean; nextCursor?: string }>;
     iterateHistory(opts: { channel: string; oldest?: string; pageSize?: number }): AsyncIterable<HistoryMessage>;
+    getMessages(opts: { channel: string; timestamps: string[] }): Promise<HistoryMessage[]>;
+    listDirect(opts?: { limit?: number; cursor?: string; includeClosed?: boolean }): Promise<{ items: DirectConversation[]; nextCursor?: string }>;
+    iterateDirect(opts?: { activeSince?: string; includeClosed?: boolean; pageSize?: number; maxPages?: number }): AsyncIterable<DirectConversation>;
+  };
+  readonly activity: {
+    list(opts: { types: ActivityType[]; limit?: number; cursor?: string; unreadOnly?: boolean; includeMessages?: boolean }): Promise<{ items: ActivityItem[]; nextCursor?: string }>;
+    iterate(opts: { types: ActivityType[]; since?: string; unreadOnly?: boolean; pageSize?: number; maxPages?: number; includeMessages?: boolean }): AsyncIterable<ActivityItem>;
   };
   readonly presence: { getStatus(userId: string): Promise<PresenceStatus> };
 
   constructor(
     private readonly policy: ScopePolicy,
-    api: { chat: ChatApi; threads: ThreadsApi; files: FilesApi; search: SearchApi; reactions: ReactionsApi; users: UsersApi; channels: ChannelsApi; presence: PresenceApi },
+    api: { chat: ChatApi; threads: ThreadsApi; files: FilesApi; search: SearchApi; reactions: ReactionsApi; users: UsersApi; channels: ChannelsApi; activity: ActivityApi; presence: PresenceApi },
     private readonly registry: SelfRegistry,
     private readonly logger: Logger,
   ) {
@@ -270,6 +277,28 @@ export class ScopedClient {
       iterateHistory(opts) {
         self.checkRead(opts.channel);
         return api.channels.iterateHistory(opts);
+      },
+      async getMessages(opts) {
+        self.checkRead(opts.channel);
+        return api.channels.getMessages(opts);
+      },
+      async listDirect(opts) {
+        const page = await api.channels.listDirect(opts);
+        return { ...page, items: page.items.filter((d) => allowedChannel(d.channel.id)) };
+      },
+      async *iterateDirect(opts) {
+        for await (const d of api.channels.iterateDirect(opts)) if (allowedChannel(d.channel.id)) yield d;
+      },
+    };
+    // Under a channel allow-list, entries that point at no conversation are dropped too.
+    const allowedActivity = (item: ActivityItem) => !policy.read?.channels || (item.channel !== undefined && allowedChannel(item.channel.id));
+    this.activity = {
+      async list(opts) {
+        const page = await api.activity.list(opts);
+        return { ...page, items: page.items.filter(allowedActivity) };
+      },
+      async *iterate(opts) {
+        for await (const item of api.activity.iterate(opts)) if (allowedActivity(item)) yield item;
       },
     };
     this.presence = { getStatus: (id) => api.presence.getStatus(id) };

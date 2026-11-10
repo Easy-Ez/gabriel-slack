@@ -33,6 +33,8 @@ READ_ONLY_PREFIXES: tuple[str, ...] = (
     "conversations.replies",
     "conversations.info",
     "client.",
+    "messages.list",
+    "activity.feed",
     "users.",
     "usergroups.list",
     "usergroups.users.list",

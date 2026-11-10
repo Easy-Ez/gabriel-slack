@@ -6,6 +6,23 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `client.channels.listDirect()` / `iterateDirect({ activeSince })`: your 1:1 and group direct
+  conversations with the timestamp of their newest message, including closed ones.
+- `client.activity.list({ types })` / `iterate({ types, since })`: the Activity feed (mentions,
+  DMs, thread replies, reactions). Each entry is resolved to its full message; use
+  `types: ["at_user"]` for messages that name you.
+- `client.channels.getMessages({ channel, timestamps })`: fetches specific messages, thread
+  replies included.
+- `HistoryMessage` has `mentions`, `mentionReasons`, `subtype` and `isDeleted`; `ThreadMessage`
+  has `mentions` and `mentionReasons`; `SearchMessageHit` has `mentions`, `mentionReasons`,
+  `files`, `attribution` and `channel.isIm` / `channel.isMpim`.
+- Scoped views expose the new reads, limited by `read.channels`; `channels.getHistory` accepts
+  `inclusive` there too.
+- Types `ActivityItem`, `ActivityType`, `DirectConversation`.
+
+None of the new reads marks anything read.
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

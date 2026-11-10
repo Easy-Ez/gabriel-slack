@@ -240,6 +240,11 @@ class Hydrator:
     def _channel_loader(self, id: str) -> BatchLoader[ChannelRecord]:
         return self._ims if id.startswith("D") else self.channels
 
+    @property
+    def self_user_id(self) -> str:
+        """The signed-in user's ID (empty before the session is established)."""
+        return self._core.session.user_id
+
     def peek_channel(self, id: str) -> ChannelRecord | None:
         return self._channel_loader(id).peek(id)
 
