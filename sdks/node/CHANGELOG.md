@@ -6,6 +6,11 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- `client.activity.list` / `iterate` and `client.channels.getMessages` no longer fail with
+  `too_many_channels` when one page points at more than 20 conversations: messages are fetched
+  in calls of at most 20 channels.
+
 ## [0.4.0] - 2026-11-10
 
 ### Added

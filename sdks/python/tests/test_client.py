@@ -1105,3 +1105,29 @@ async def test_scope_allow_list_covers_direct_conversations_activity_and_fetched
     await expect_code(agent.channels.get_messages("C0GENERAL01", ["1800000009.000100"]), "SCOPE_POLICY_VIOLATION")
     unrestricted = client.scope(ScopePolicy(write=WritePolicy(allowed_actions=[])))
     assert len((await unrestricted.activity.list(["at_user"])).items) == 3
+
+
+async def test_activity_resolves_many_conversations_in_calls_of_at_most_20_channels(started: Started) -> None:
+    slack = FakeSlack()
+
+    def entry(i: int) -> dict[str, Any]:
+        ts = f"18000001{i:02d}.000100"
+        message = {"ts": ts, "channel": f"C0CHAN{i:05d}"}
+        return {"key": f"k{i}", "feed_ts": ts, "is_unread": False, "item": {"type": "at_user", "message": message}}
+
+    def messages_list(f: dict[str, str], _n: int) -> dict[str, Any]:
+        ids = json.loads(f["message_ids"])
+        if len(ids) > 20:
+            return {"ok": False, "error": "too_many_channels"}
+        data = {
+            e["channel"]: {"messages": [{"ts": ts, "user": "U0ALICE0001", "text": "hi"} for ts in e["timestamps"]]}
+            for e in ids
+        }
+        return {"ok": True, "messages_data": data}
+
+    slack.on("activity.feed", lambda _f, _n: {"ok": True, "items": [entry(i) for i in range(45)]})
+    slack.on("messages.list", messages_list)
+    _, client = await started(slack)
+    page = await client.activity.list(["at_user"], limit=50)
+    assert len([i for i in page.items if i.message]) == 45
+    assert [len(json.loads(c.fields["message_ids"])) for c in slack.calls_to("messages.list")] == [20, 20, 5]

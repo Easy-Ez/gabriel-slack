@@ -681,6 +681,24 @@ describe("backfill reads", () => {
     expect(got.map((m) => m.ts)).toEqual(["1800000009.000100"]);
   });
 
+  it("resolves activity across many conversations in calls of at most 20 channels", async () => {
+    const slack = new FakeSlack();
+    const channelOf = (i: number) => `C0CHAN${String(i).padStart(5, "0")}`;
+    slack.on("activity.feed", () => ({
+      ok: true,
+      items: Array.from({ length: 45 }, (_, i) => ({ key: `k${i}`, feed_ts: `18000001${String(i).padStart(2, "0")}.000100`, is_unread: false, item: { type: "at_user", message: { ts: `18000001${String(i).padStart(2, "0")}.000100`, channel: channelOf(i) } } })),
+    }));
+    slack.on("messages.list", (f) => {
+      const ids = JSON.parse(f.message_ids!) as Array<{ channel: string; timestamps: string[] }>;
+      if (ids.length > 20) return { ok: false, error: "too_many_channels" };
+      return { ok: true, messages_data: Object.fromEntries(ids.map(({ channel, timestamps }) => [channel, { messages: timestamps.map((ts) => ({ ts, user: "U0ALICE0001", text: "hi" })) }])) };
+    });
+    const { client } = await started(slack);
+    const page = await client.activity.list({ types: ["at_user"], limit: 50 });
+    expect(page.items.filter((i) => i.message)).toHaveLength(45);
+    expect(slack.callsTo("messages.list").map((c) => (JSON.parse(c.fields.message_ids!) as unknown[]).length)).toEqual([20, 20, 5]);
+  });
+
   it("applies the read allow-list to direct conversations, activity and fetched messages", async () => {
     const { client } = await started(withActivity(withDms()));
     const agent = client.scope({ read: { channels: [DM] }, write: { allowedActions: [] } });

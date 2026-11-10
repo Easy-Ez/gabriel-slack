@@ -892,19 +892,27 @@ def _to_history_message(r: _Rendered) -> HistoryMessage:
     )
 
 
-_MESSAGES_LIST_BATCH = 50
+_MESSAGES_LIST_MAX_MESSAGES = 50
+#: ``messages.list`` rejects more channels per call with ``too_many_channels``.
+_MESSAGES_LIST_MAX_CHANNELS = 20
 
 
 async def _fetch_messages(
     core: GabrielCore, h: Hydrator, wanted: dict[str, list[str]]
 ) -> dict[str, dict[str, HistoryMessage]]:
     """``messages.list``: full messages for (channel, ts) pairs, keyed by channel then ts."""
-    pairs = [(channel, ts) for channel, tss in wanted.items() for ts in dict.fromkeys(tss)]
+    batches: list[dict[str, list[str]]] = []
+    size = 0
+    for channel, tss in wanted.items():
+        for ts in dict.fromkeys(tss):
+            full = size >= _MESSAGES_LIST_MAX_MESSAGES
+            if not batches or full or (channel not in batches[-1] and len(batches[-1]) >= _MESSAGES_LIST_MAX_CHANNELS):
+                batches.append({})
+                size = 0
+            batches[-1].setdefault(channel, []).append(ts)
+            size += 1
     out: dict[str, dict[str, HistoryMessage]] = {}
-    for i in range(0, len(pairs), _MESSAGES_LIST_BATCH):
-        ids: dict[str, list[str]] = {}
-        for channel, ts in pairs[i : i + _MESSAGES_LIST_BATCH]:
-            ids.setdefault(channel, []).append(ts)
+    for ids in batches:
         res = await core.call_web_api(
             "messages.list",
             {
