@@ -6,6 +6,8 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-10
+
 ### Fixed
 - `client.activity.list` / `iterate` and `client.channels.get_messages` no longer fail with
   `too_many_channels` when one page points at more than 20 conversations: messages are fetched
