@@ -298,7 +298,8 @@ anything read, opens or closes a conversation, or writes in any other way.
   message (channel, ts, thread ts), never its content. Iteration is newest first, de-duplicated by
   key, and stops at the first entry older than the requested lower bound.
 * Messages by timestamp: `messages.list` (`message_ids = [{ channel, timestamps }]`,
-  `org_wide_aware=true`), at most **50** messages per call. Activity entries are resolved to
+  `org_wide_aware=true`), at most **50** messages and **20** channels per call (more channels
+  fail with `too_many_channels`). Activity entries are resolved to
   full messages this way; an entry whose message no longer exists is kept without a message.
 
 History, thread, activity and search messages carry `mentions` and `mentionReasons` computed by

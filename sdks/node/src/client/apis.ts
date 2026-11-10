@@ -893,15 +893,27 @@ function toHistoryMessage({ msg, sender, markdown, files, mentions, mentionReaso
   };
 }
 
-const MESSAGES_LIST_BATCH = 50;
+const MESSAGES_LIST_MAX_MESSAGES = 50;
+/** `messages.list` rejects more channels per call with `too_many_channels`. */
+const MESSAGES_LIST_MAX_CHANNELS = 20;
 
 /** `messages.list`: full messages for (channel, ts) pairs, keyed by channel then ts. */
 async function fetchMessages(core: GabrielCore, h: Hydrator, wanted: Map<string, string[]>): Promise<Map<string, Map<string, HistoryMessage>>> {
-  const pairs = [...wanted].flatMap(([channel, tss]) => [...new Set(tss)].map((ts) => ({ channel, ts })));
+  const batches: Array<Map<string, string[]>> = [];
+  let size = 0;
+  for (const [channel, tss] of wanted) {
+    for (const ts of new Set(tss)) {
+      let batch = batches[batches.length - 1];
+      if (!batch || size >= MESSAGES_LIST_MAX_MESSAGES || (!batch.has(channel) && batch.size >= MESSAGES_LIST_MAX_CHANNELS)) {
+        batches.push((batch = new Map()));
+        size = 0;
+      }
+      batch.set(channel, [...(batch.get(channel) ?? []), ts]);
+      size++;
+    }
+  }
   const out = new Map<string, Map<string, HistoryMessage>>();
-  for (let i = 0; i < pairs.length; i += MESSAGES_LIST_BATCH) {
-    const ids = new Map<string, string[]>();
-    for (const p of pairs.slice(i, i + MESSAGES_LIST_BATCH)) ids.set(p.channel, [...(ids.get(p.channel) ?? []), p.ts]);
+  for (const ids of batches) {
     const res = await core.callWebApi<{ messages_data?: Record<string, { messages?: Obj[] }> }>(
       "messages.list",
       { message_ids: [...ids].map(([channel, timestamps]) => ({ channel, timestamps })), org_wide_aware: true, cached_latest_updates: "{}" },
