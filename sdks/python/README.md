@@ -208,7 +208,8 @@ reaching other handlers. Handlers for one channel run one at a time in arrival o
 | `client.presence` | `watch(user_ids, track_profile_and_dnd=False)` → handle (`await h.unsubscribe()` / `async with`), `get_status(user_id)` |
 | `client.reactions` | `add(channel, ts, emoji)`, `remove` (idempotent) |
 | `client.users` | `resolve(id or ids)` (batched, cached), `get_dnd` |
-| `client.channels` | `resolve`, `get_history`, `iterate_history` |
+| `client.channels` | `resolve`, `get_history`, `iterate_history`, `get_messages(channel, timestamps)`, `list_direct` / `iterate_direct(active_since=…)` (my 1:1 and group DMs with their latest activity) |
+| `client.activity` | `list(types, limit=…, cursor=…, unread_only=…)`, `iterate(types, since=…)`: the Activity feed (mentions, DMs, thread replies, reactions), each entry resolved to its full message |
 
 Streams: `append()` is synchronous; at most one update per stream is in flight and the final
 message equals the buffer at `finish()`. Deleting the message in Slack aborts `stream.signal`.

@@ -14,7 +14,7 @@ import type { Logger } from "../util/logger.js";
 import { silentLogger } from "../util/logger.js";
 import { LruCache } from "../util/lru.js";
 import { compareTs, isSubteamId } from "../util/validate.js";
-import { ChannelsApi, FilesApi, ReactionsApi, SearchApi, ThreadsApi, UsersApi } from "./apis.js";
+import { ActivityApi, ChannelsApi, FilesApi, ReactionsApi, SearchApi, ThreadsApi, UsersApi } from "./apis.js";
 import { ChatApi, type ChatSchedulerOptions, type CreateStreamOptions, type SendOptions, type SendResult } from "./chat.js";
 import {
   WaitRegistry,
@@ -147,6 +147,7 @@ export class GabrielClient {
   readonly reactions: ReactionsApi;
   readonly users: UsersApi;
   readonly channels: ChannelsApi;
+  readonly activity: ActivityApi;
 
   private readonly logger: Logger;
   private readonly metrics: MetricsSink;
@@ -259,6 +260,7 @@ export class GabrielClient {
     this.reactions = new ReactionsApi(this.core);
     this.users = new UsersApi(this.hydrator);
     this.channels = new ChannelsApi(this.core, this.hydrator);
+    this.activity = new ActivityApi(this.core, this.hydrator);
     this.presence = new PresenceApi(this.core, this.hydrator, (evt, lane) => this.emitSynthetic(evt, lane), this.logger);
 
     this.core.onRawFrame((frame) => this.onFrame(frame));
@@ -362,7 +364,7 @@ export class GabrielClient {
   scope(policy: ScopePolicy): ScopedClient {
     return new ScopedClient(
       policy,
-      { chat: this.chat, threads: this.threads, files: this.files, search: this.search, reactions: this.reactions, users: this.users, channels: this.channels, presence: this.presence },
+      { chat: this.chat, threads: this.threads, files: this.files, search: this.search, reactions: this.reactions, users: this.users, channels: this.channels, activity: this.activity, presence: this.presence },
       this.registry,
       this.logger,
     );

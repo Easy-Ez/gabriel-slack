@@ -6,6 +6,23 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `client.channels.list_direct()` / `iterate_direct(active_since=…)`: your 1:1 and group direct
+  conversations with the timestamp of their newest message, including closed ones.
+- `client.activity.list(types)` / `iterate(types, since=…)`: the Activity feed (mentions, DMs,
+  thread replies, reactions). Each entry is resolved to its full message; use
+  `types=["at_user"]` for messages that name you.
+- `client.channels.get_messages(channel, timestamps)`: fetches specific messages, thread replies
+  included.
+- `HistoryMessage` has `mentions`, `mention_reasons`, `subtype` and `is_deleted`; `ThreadMessage`
+  has `mentions` and `mention_reasons`; `SearchMessageHit` has `mentions`, `mention_reasons`,
+  `files`, `attribution` and `channel.is_im` / `channel.is_mpim`.
+- Scoped views expose the new reads, limited by `read.channels`; `channels.get_history` accepts
+  `inclusive` there too.
+- Types `ActivityItem`, `ActivityPage`, `DirectConversation`, `DirectPage`.
+
+None of the new reads marks anything read.
+
 ## [0.3.0] - 2026-11-04
 
 ### Added

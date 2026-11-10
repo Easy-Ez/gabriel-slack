@@ -236,7 +236,7 @@ function userRefFromResolver(id: string, r: EntityResolver) {
 }
 
 /** Sets `includesMe` on usergroup mentions whose membership is known, and lists the reasons the message mentions me. */
-function mentionReasonsOf(mentions: Mention[], ctx: NormalizeContext): MentionReason[] {
+export function mentionReasonsOf(mentions: Mention[], ctx: Pick<NormalizeContext, "selfUserId" | "isMySubteam">): MentionReason[] {
   const found = new Set<MentionReason>();
   for (const m of mentions) {
     if (m.kind === "user" && m.id === ctx.selfUserId) found.add("direct");

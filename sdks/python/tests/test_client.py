@@ -938,3 +938,170 @@ async def test_wait_for_reply_accepts_truthy_predicates(started: Started) -> Non
     slack.socket.deliver(message_frame(text="yes", ts="1800000002.000100"))
     await until(lambda: len(got) == 1)
     assert got[0] is not None and got[0].text == "yes"
+
+
+# ------------------------------------------------------------------------------- backfill reads
+
+DM = "D0ALICE0001"
+GROUP = "G0GROUP0001"
+
+
+def _rich(*elements: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{"type": "rich_text", "elements": [{"type": "rich_text_section", "elements": list(elements)}]}]
+
+
+def _with_dms(slack: FakeSlack) -> FakeSlack:
+    def dms(f: dict[str, str], _n: int) -> dict[str, Any]:
+        if f.get("cursor"):
+            group = {"id": GROUP, "name": "mpdm-me--alice--bob-1", "is_mpim": True, "is_open": True}
+            return {
+                "ok": True,
+                "dms": [{"id": GROUP, "latest": "1800000050.000100", "channel": group}],
+                "response_metadata": {"next_cursor": ""},
+            }
+        alice = {"id": DM, "is_im": True, "user": "U0ALICE0001", "is_open": False}
+        bob = {"id": "D0BOB000001", "is_im": True, "user": "U0BOB000001", "is_open": True}
+        return {
+            "ok": True,
+            "dms": [{"id": DM, "latest": "1800000100.000100", "channel": alice}, {"id": "D0BOB000001", "channel": bob}],
+            "response_metadata": {"next_cursor": "page2"},
+        }
+
+    slack.on("client.dms", dms)
+    return slack
+
+
+def _with_activity(slack: FakeSlack) -> FakeSlack:
+    slack.channels[DM] = {"id": DM, "is_im": True, "user": "U0ALICE0001"}
+
+    def at_user(key: str, ts: str, **extra: str) -> dict[str, Any]:
+        message = {"ts": ts, "channel": "C0GENERAL01", **extra}
+        return {"key": key, "feed_ts": ts, "is_unread": key == "k1", "item": {"type": "at_user", "message": message}}
+
+    def feed(f: dict[str, str], _n: int) -> dict[str, Any]:
+        if f.get("cursor"):
+            return {"ok": True, "items": [at_user("k3", "1700000000.000100")], "response_metadata": {"next_cursor": ""}}
+        latest = {"ts": "1800000008.000100", "channel": DM}
+        dm = {"type": "dm", "bundle_info": {"payload": {"dm_entry": {"latest_message": latest}}}}
+        return {
+            "ok": True,
+            "items": [
+                at_user("k1", "1800000009.000100", thread_ts="1800000005.000100"),
+                {"key": "k2", "feed_ts": "1800000008.000100", "is_unread": False, "item": dm},
+                at_user("k4", "1800000007.000100"),
+            ],
+            "response_metadata": {"next_cursor": "older"},
+        }
+
+    stored: dict[str, dict[str, Any]] = {
+        "1800000009.000100": {
+            "user": "U0ALICE0001",
+            "text": "<@U0SELF00001> ping",
+            "thread_ts": "1800000005.000100",
+            "blocks": _rich({"type": "user", "user_id": SELF}, {"type": "text", "text": " ping"}),
+        },
+        "1800000008.000100": {"user": "U0ALICE0001", "text": "hello"},
+    }
+
+    def messages_list(f: dict[str, str], _n: int) -> dict[str, Any]:
+        data = {
+            entry["channel"]: {
+                "messages": [{"ts": ts, "type": "message", **stored[ts]} for ts in entry["timestamps"] if ts in stored]
+            }
+            for entry in json.loads(f["message_ids"])
+        }
+        return {"ok": True, "messages_data": data}
+
+    slack.on("activity.feed", feed)
+    slack.on("messages.list", messages_list)
+    return slack
+
+
+async def test_list_direct_conversations_with_latest_activity(started: Started) -> None:
+    slack, client = await started(_with_dms(FakeSlack()))
+    page = await client.channels.list_direct()
+    assert page.next_cursor == "page2"
+    first, second = page.items
+    assert (first.channel.id, first.channel.name, first.channel.is_im) == (DM, "@Alice", True)
+    assert (first.latest_ts, first.is_open) == ("1800000100.000100", False)
+    assert first.peer is not None and first.peer.display_name == "Alice"
+    assert (second.channel.name, second.latest_ts, second.is_open) == ("@Bob", None, True)
+    fields = slack.calls_to("client.dms")[0].fields
+    assert (fields["count"], fields["include_closed"], fields["include_channel"]) == ("50", "true", "true")
+
+    recent = [d.channel.id async for d in client.channels.iterate_direct(active_since="1800000040.000100")]
+    assert recent == [DM, GROUP]
+    assert slack.calls_to("client.dms")[-1].fields["cursor"] == "page2"
+    # Listing never marks, opens or closes a conversation.
+    assert not any(re.search(r"mark|conversations\.(open|close)", c.method) for c in slack.calls)
+
+
+async def test_history_messages_carry_mentions_subtype_and_deletion_state(started: Started) -> None:
+    slack = FakeSlack()
+    mention = {
+        "ts": "1800000003.000100",
+        "user": "U0ALICE0001",
+        "text": "<@U0SELF00001> and <!subteam^S0ONCALL001>",
+        "blocks": _rich(
+            {"type": "user", "user_id": SELF},
+            {"type": "text", "text": " and "},
+            {"type": "usergroup", "usergroup_id": "S0ONCALL001"},
+        ),
+    }
+    join = {"ts": "1800000002.000100", "user": "U0BOB000001", "subtype": "channel_join", "text": "joined"}
+    gone = {"ts": "1800000001.000100", "user": "U0ALICE0001", "subtype": "tombstone", "text": "deleted"}
+    slack.on("conversations.history", lambda _f, _n: {"ok": True, "has_more": False, "messages": [mention, join, gone]})
+    _, client = await started(slack)
+    first, second, third = (await client.channels.get_history("C0GENERAL01")).messages
+    assert [(m.kind, m.id, m.name, m.includes_me) for m in first.mentions] == [
+        ("user", SELF, "Me", None),
+        ("usergroup", "S0ONCALL001", "oncall", True),
+    ]
+    assert first.mention_reasons == ["direct", "usergroup"]
+    assert (first.subtype, first.is_deleted) == (None, False)
+    assert (second.subtype, second.mention_reasons, second.is_deleted) == ("channel_join", [], False)
+    assert (third.subtype, third.is_deleted) == ("tombstone", True)
+
+
+async def test_activity_feed_resolves_entries_to_full_messages(started: Started) -> None:
+    slack, client = await started(_with_activity(FakeSlack()))
+    page = await client.activity.list(["at_user", "dm"])
+    fields = slack.calls_to("activity.feed")[0].fields
+    assert (fields["types"], fields["mode"], fields["limit"]) == ("at_user,dm", "chrono_reads_and_unreads", "20")
+    assert len(slack.calls_to("messages.list")) == 1
+    assert page.next_cursor == "older"
+    k1, k2, k4 = page.items
+    assert (k1.key, k1.type, k1.is_unread, k1.ts, k1.thread_ts) == (
+        "k1",
+        "at_user",
+        True,
+        "1800000009.000100",
+        "1800000005.000100",
+    )
+    assert k1.channel is not None and (k1.channel.id, k1.channel.name) == ("C0GENERAL01", "general")
+    assert k1.message is not None and k1.message.sender.display_name == "Alice"
+    assert (k1.message.markdown, k1.message.mention_reasons) == ("@Me ping", ["direct"])
+    assert k1.message.thread is not None and k1.message.thread.root_ts == "1800000005.000100"
+    assert k2.channel is not None and (k2.type, k2.channel.is_im, k2.channel.name) == ("dm", True, "@Alice")
+    assert k2.message is not None and k2.message.markdown == "hello"
+    # The message behind k4 no longer exists: the entry stays, without a message.
+    assert (k4.ts, k4.message) == ("1800000007.000100", None)
+
+    keys = [i.key async for i in client.activity.iterate(["at_user", "dm"], since="1750000000.000000")]
+    assert keys == ["k1", "k2", "k4"]
+    marks = r"^activity\.mark|conversations\.mark|subscriptions\.thread\.mark"
+    assert not any(re.search(marks, c.method) for c in slack.calls)
+    await expect_code(client.activity.list([]), "INVALID_ARGUMENT")
+
+    got = await client.channels.get_messages("C0GENERAL01", ["1800000009.000100", "1800000007.000100"])
+    assert [m.ts for m in got] == ["1800000009.000100"]
+
+
+async def test_scope_allow_list_covers_direct_conversations_activity_and_fetched_messages(started: Started) -> None:
+    _, client = await started(_with_activity(_with_dms(FakeSlack())))
+    agent = client.scope(ScopePolicy(read=ReadPolicy(channels=[DM]), write=WritePolicy(allowed_actions=[])))
+    assert [d.channel.id for d in (await agent.channels.list_direct()).items] == [DM]
+    assert [i.key for i in (await agent.activity.list(["at_user", "dm"])).items] == ["k2"]
+    await expect_code(agent.channels.get_messages("C0GENERAL01", ["1800000009.000100"]), "SCOPE_POLICY_VIOLATION")
+    unrestricted = client.scope(ScopePolicy(write=WritePolicy(allowed_actions=[])))
+    assert len((await unrestricted.activity.list(["at_user"])).items) == 3

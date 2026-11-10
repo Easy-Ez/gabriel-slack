@@ -14,6 +14,8 @@ const READ_ONLY_PREFIXES = [
   "conversations.replies",
   "conversations.info",
   "client.",
+  "messages.list",
+  "activity.feed",
   "users.",
   "usergroups.list",
   "usergroups.users.list",

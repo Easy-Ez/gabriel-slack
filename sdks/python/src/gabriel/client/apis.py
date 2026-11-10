@@ -1,29 +1,36 @@
-"""Domain APIs: threads, search, reactions, users, channels and files."""
+"""Domain APIs: threads, search, reactions, users, channels, activity and files."""
 
 from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
 
 from ..core.types import RequestOpts
 from ..errors import GabrielError
-from ..events.normalize import render_message_markdown, to_file_refs
-from ..events.types import ChannelRef, DndInfo, FileRef, MessageAttribution, UserRef
-from ..markdown.attribution import attribution_user_ids, parse_attribution
+from ..events.normalize import (
+    NormalizeContext,
+    extract_mentions,
+    mention_reasons_of,
+    render_message_markdown,
+    to_file_refs,
+)
+from ..events.types import ChannelRef, DndInfo, FileRef, Mention, MentionReason, MessageAttribution, UserRef
+from ..markdown.attribution import attribution_user_ids, parse_attribution, split_attribution
 from ..markdown.chunker import _JS_WS
 from ..util.validate import (
     assert_channel_id,
     assert_non_empty_string,
     assert_ts,
     assert_user_id,
+    compare_ts,
     is_ts,
     normalize_emoji,
 )
-from .hydrator import Hydrator, channel_ref, to_user_record, user_ref
+from .hydrator import ChannelRecord, Hydrator, channel_ref, to_channel_record, to_user_record, user_ref
 
 if TYPE_CHECKING:
     from ..core.core import GabrielCore
@@ -73,6 +80,8 @@ class _Rendered:
     markdown: str
     files: list[FileRef]
     attribution: MessageAttribution | None = None
+    mentions: list[Mention] = field(default_factory=list)
+    mention_reasons: list[MentionReason] = field(default_factory=list)
 
 
 async def _render_messages(h: Hydrator, messages: list[Obj]) -> list[_Rendered]:
@@ -87,13 +96,29 @@ async def _render_messages(h: Hydrator, messages: list[Obj]) -> list[_Rendered]:
             ids[uid] = None
     await asyncio.gather(*(h.users.load(id) for id in ids), return_exceptions=True)
 
+    ctx = NormalizeContext(self_user_id=h.self_user_id, is_my_subteam=h.subteam_membership)
+
     async def one(msg: Obj) -> _Rendered:
+        mentions = extract_mentions(split_attribution(msg.get("blocks"))[1], _s(msg.get("text")))
+        for m in mentions:
+            lookup = (
+                h.resolver.user_name
+                if m.kind == "user"
+                else h.resolver.usergroup_handle
+                if m.kind == "usergroup"
+                else None
+            )
+            name = lookup(m.id) if lookup else None
+            if name:
+                m.name = name
         return _Rendered(
             msg,
             await _sender_of(h, msg),
             render_message_markdown(msg, h.resolver),
             to_file_refs(msg.get("files")),
             parse_attribution(msg.get("blocks"), h.resolver),
+            mentions,
+            mention_reasons_of(mentions, ctx),
         )
 
     return list(await asyncio.gather(*(one(m) for m in messages)))
@@ -112,6 +137,10 @@ class ThreadMessage:
     is_deleted: bool
     #: Self-declared agent attribution line, removed from ``markdown`` (spec §9.1). Unverified.
     attribution: MessageAttribution | None = None
+    #: Users, user groups and broadcasts mentioned in the body.
+    mentions: list[Mention] = field(default_factory=list)
+    #: Why the message mentions me (same rules as ``message.created.mention_reasons``).
+    mention_reasons: list[MentionReason] = field(default_factory=list)
 
 
 @dataclass(kw_only=True, slots=True)
@@ -207,6 +236,8 @@ class ThreadsApi:
                 markdown=r.markdown,
                 attribution=r.attribution,
                 files=r.files,
+                mentions=r.mentions,
+                mention_reasons=r.mention_reasons,
                 is_deleted=r.msg.get("subtype") == "tombstone" or r.msg.get("is_deleted") is True,
             )
             for r in rendered
@@ -248,6 +279,8 @@ class ThreadsApi:
                     markdown=r.markdown,
                     attribution=r.attribution,
                     files=r.files,
+                    mentions=r.mentions,
+                    mention_reasons=r.mention_reasons,
                     is_deleted=r.msg.get("subtype") == "tombstone",
                 )
             cursor = _s(_o(res.get("response_metadata")).get("next_cursor")) if res.get("has_more") else None
@@ -351,6 +384,11 @@ class SearchMessageHit:
     markdown: str
     thread_ts: str | None = None
     permalink: str | None = None
+    #: Self-declared agent attribution line, removed from ``markdown`` (spec §9.1). Unverified.
+    attribution: MessageAttribution | None = None
+    files: list[FileRef] = field(default_factory=list)
+    mentions: list[Mention] = field(default_factory=list)
+    mention_reasons: list[MentionReason] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -422,9 +460,15 @@ class SearchApi:
                     id=_s(ch.get("id")) or "",
                     name=strip_highlight(ch_name) if ch_name else None,
                     is_private=ch["is_private"] if isinstance(ch.get("is_private"), bool) else None,
+                    is_im=ch["is_im"] if isinstance(ch.get("is_im"), bool) else None,
+                    is_mpim=ch["is_mpim"] if isinstance(ch.get("is_mpim"), bool) else None,
                 ),
                 sender=r2.sender,
                 markdown=strip_highlight(r2.markdown),
+                attribution=r2.attribution,
+                files=r2.files,
+                mentions=r2.mentions,
+                mention_reasons=r2.mention_reasons,
                 thread_ts=_s(r2.msg.get("thread_ts")),
                 permalink=_s(r2.msg.get("permalink")),
             )
@@ -583,6 +627,33 @@ class HistoryMessage:
     thread: HistoryThread | None
     #: Self-declared agent attribution line, removed from ``markdown`` (spec §9.1). Unverified.
     attribution: MessageAttribution | None = None
+    #: Users, user groups and broadcasts mentioned in the body.
+    mentions: list[Mention] = field(default_factory=list)
+    #: Why the message mentions me (same rules as ``message.created.mention_reasons``).
+    mention_reasons: list[MentionReason] = field(default_factory=list)
+    #: Raw message subtype (``channel_join``, ``bot_message``, ``thread_broadcast``, …) if any.
+    subtype: str | None = None
+    is_deleted: bool = False
+
+
+@dataclass(kw_only=True, slots=True)
+class DirectConversation:
+    """A 1:1 direct message or a group direct message I am in."""
+
+    #: ``is_im`` / ``is_mpim`` are set; a 1:1 DM is named ``@peer`` when the peer resolves.
+    channel: ChannelRef
+    #: Timestamp of the newest message, when Slack reports one.
+    latest_ts: str | None = None
+    #: Whether the conversation is open in my sidebar.
+    is_open: bool | None = None
+    #: The other person in a 1:1 DM.
+    peer: UserRef | None = None
+
+
+@dataclass(kw_only=True, slots=True)
+class DirectPage:
+    items: list[DirectConversation]
+    next_cursor: str | None = None
 
 
 @dataclass(kw_only=True, slots=True)
@@ -645,6 +716,94 @@ class ChannelsApi:
         rendered = await _render_messages(self._h, res.messages)
         messages = [_to_history_message(r) for r in rendered]
         return HistoryPage(messages=messages, has_more=res.has_more, next_cursor=res.next_cursor)
+
+    async def list_direct(
+        self, *, limit: int = 50, cursor: str | None = None, include_closed: bool = True
+    ) -> DirectPage:
+        """One page of my direct conversations (1:1 and group), as the DMs view lists them.
+
+        Read-only: does not open, close or mark any conversation.
+        """
+        fields: Obj = {
+            "count": min(250, max(1, int(limit))),
+            "include_closed": include_closed,
+            "include_channel": True,
+            "exclude_bots": False,
+        }
+        if cursor:
+            fields["cursor"] = assert_non_empty_string(cursor, "cursor", 2000)
+        res = await self._core.call_web_api("client.dms", fields, RequestOpts(reason="dms-tab-populate"))
+        seen: set[str] = set()
+        rows: list[tuple[ChannelRecord, str | None, bool | None]] = []
+        for key in ("dms", "ims", "mpims"):
+            for entry in res.get(key) or []:
+                if not isinstance(entry, dict):
+                    continue
+                raw = _o(entry.get("channel"))
+                id = _s(raw.get("id")) or _s(entry.get("id"))
+                if not id or id in seen:
+                    continue
+                seen.add(id)
+                rec = to_channel_record({**raw, "id": id})
+                if rec.is_im is None and rec.is_mpim is None:
+                    rec.is_im = id.startswith("D")
+                self._h.prime_channel(rec)
+                latest = _s(entry.get("latest")) or _s(_o(entry.get("message")).get("ts"))
+                is_open = raw.get("is_open")
+                rows.append((rec, latest if is_ts(latest) else None, is_open if isinstance(is_open, bool) else None))
+        peers = list(dict.fromkeys(rec.im_user_id for rec, _, _ in rows if rec.im_user_id))
+        await asyncio.gather(*(self._h.users.load(id) for id in peers), return_exceptions=True)
+        items: list[DirectConversation] = []
+        for rec, latest_ts, is_open in rows:
+            ref = channel_ref(rec, rec.id)
+            if rec.im_user_id and self._h.resolver.channel_name:
+                name = self._h.resolver.channel_name(rec.id)
+                if name:
+                    ref.name = name
+            items.append(
+                DirectConversation(
+                    channel=ref,
+                    latest_ts=latest_ts,
+                    is_open=is_open,
+                    peer=user_ref(self._h.users.peek(rec.im_user_id), rec.im_user_id) if rec.im_user_id else None,
+                )
+            )
+        return DirectPage(items=items, next_cursor=_s(_o(res.get("response_metadata")).get("next_cursor")))
+
+    async def iterate_direct(
+        self,
+        *,
+        active_since: str | None = None,
+        include_closed: bool = True,
+        page_size: int = 50,
+        max_pages: int = 50,
+    ) -> AsyncIterator[DirectConversation]:
+        """Iterates my direct conversations. ``active_since`` skips those whose newest message is older (or unknown)."""
+        if active_since is not None:
+            assert_ts(active_since, "active_since")
+        seen: set[str] = set()
+        cursor: str | None = None
+        for _ in range(max_pages):
+            res = await self.list_direct(limit=page_size, cursor=cursor, include_closed=include_closed)
+            for item in res.items:
+                if item.channel.id in seen:
+                    continue
+                seen.add(item.channel.id)
+                if active_since is not None and (not item.latest_ts or compare_ts(item.latest_ts, active_since) < 0):
+                    continue
+                yield item
+            if not res.next_cursor or res.next_cursor == cursor:
+                return
+            cursor = res.next_cursor
+
+    async def get_messages(self, channel: str, timestamps: list[str]) -> list[HistoryMessage]:
+        """Fetches specific messages of one conversation by timestamp (top-level messages and
+        thread replies alike). Messages that no longer exist are left out; order follows
+        ``timestamps``."""
+        channel = assert_channel_id(channel)
+        wanted = [assert_ts(ts, "timestamps") for ts in timestamps]
+        found = (await _fetch_messages(self._core, self._h, {channel: wanted})).get(channel, {})
+        return [found[ts] for ts in dict.fromkeys(wanted) if ts in found]
 
     async def raw_history(
         self,
@@ -719,6 +878,10 @@ def _to_history_message(r: _Rendered) -> HistoryMessage:
         markdown=r.markdown,
         attribution=r.attribution,
         files=r.files,
+        mentions=r.mentions,
+        mention_reasons=r.mention_reasons,
+        subtype=_s(msg.get("subtype")),
+        is_deleted=msg.get("subtype") == "tombstone" or msg.get("is_deleted") is True,
         thread=HistoryThread(
             root_ts=thread_ts,
             reply_count=reply_count if isinstance(reply_count, int) else 0,
@@ -727,3 +890,198 @@ def _to_history_message(r: _Rendered) -> HistoryMessage:
         if thread_ts
         else None,
     )
+
+
+_MESSAGES_LIST_BATCH = 50
+
+
+async def _fetch_messages(
+    core: GabrielCore, h: Hydrator, wanted: dict[str, list[str]]
+) -> dict[str, dict[str, HistoryMessage]]:
+    """``messages.list``: full messages for (channel, ts) pairs, keyed by channel then ts."""
+    pairs = [(channel, ts) for channel, tss in wanted.items() for ts in dict.fromkeys(tss)]
+    out: dict[str, dict[str, HistoryMessage]] = {}
+    for i in range(0, len(pairs), _MESSAGES_LIST_BATCH):
+        ids: dict[str, list[str]] = {}
+        for channel, ts in pairs[i : i + _MESSAGES_LIST_BATCH]:
+            ids.setdefault(channel, []).append(ts)
+        res = await core.call_web_api(
+            "messages.list",
+            {
+                "message_ids": [{"channel": c, "timestamps": tss} for c, tss in ids.items()],
+                "org_wide_aware": True,
+                "cached_latest_updates": "{}",
+            },
+            RequestOpts(reason="messages-ufm"),
+        )
+        for channel, data in _o(res.get("messages_data")).items():
+            raw = [m for m in _o(data).get("messages") or [] if isinstance(m, dict) and is_ts(m.get("ts"))]
+            for m in raw:
+                h.record_thread_root(m["ts"], _s(m.get("thread_ts")))
+            bucket = out.setdefault(channel, {})
+            for r in await _render_messages(h, raw):
+                bucket[r.msg["ts"]] = _to_history_message(r)
+    return out
+
+
+# ---------------------------------------------------------------------------------------------
+# activity
+
+_ACTIVITY_TYPE = re.compile(r"^[a-z][a-z0-9_]{0,60}$")
+
+
+@dataclass(kw_only=True, slots=True)
+class ActivityItem:
+    #: Stable key of the feed entry.
+    key: str
+    #: Entry kind. Mentions: ``at_user``, ``at_user_group``, ``at_channel``, ``at_everyone``,
+    #: ``keyword``; also ``dm``, ``thread_v2``, ``message_reaction`` and others.
+    type: str
+    #: When the entry entered the feed.
+    feed_ts: str
+    is_unread: bool
+    #: Conversation of the message the entry points at, when it points at one.
+    channel: ChannelRef | None = None
+    ts: str | None = None
+    thread_ts: str | None = None
+    #: The message itself (absent when it was deleted, is not readable, or ``include_messages`` is false).
+    message: HistoryMessage | None = None
+
+
+@dataclass(kw_only=True, slots=True)
+class ActivityPage:
+    items: list[ActivityItem]
+    next_cursor: str | None = None
+
+
+def _activity_target(item: Obj) -> tuple[str, str, str | None] | None:
+    payload = _o(_o(item.get("bundle_info")).get("payload"))
+    thread = _o(payload.get("thread_entry"))
+    channel_id = _s(thread.get("channel_id"))
+    if channel_id and is_ts(thread.get("latest_ts")):
+        thread_ts = thread.get("thread_ts")
+        return channel_id, thread["latest_ts"], thread_ts if is_ts(thread_ts) else None
+    for m in (
+        _o(item.get("message")),
+        _o(payload.get("message")),
+        _o(_o(payload.get("dm_entry")).get("latest_message")),
+    ):
+        channel = _s(m.get("channel"))
+        if channel and is_ts(m.get("ts")):
+            thread_ts = m.get("thread_ts")
+            return channel, m["ts"], thread_ts if is_ts(thread_ts) else None
+    return None
+
+
+class ActivityApi:
+    """The Activity feed (mentions, DMs, thread replies, reactions). Reading it does not mark anything read."""
+
+    def __init__(self, core: GabrielCore, h: Hydrator) -> None:
+        self._core = core
+        self._h = h
+
+    async def list(
+        self,
+        types: Sequence[str],
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+        unread_only: bool = False,
+        include_messages: bool = True,
+    ) -> ActivityPage:
+        """One page of the feed, newest first. ``types`` selects the entry kinds, e.g.
+        ``["at_user"]`` for messages that name me."""
+        if isinstance(types, str) or not types:
+            raise GabrielError("INVALID_ARGUMENT", "types must list at least one activity type")
+        for t in types:
+            if not isinstance(t, str) or not _ACTIVITY_TYPE.match(t):
+                raise GabrielError("INVALID_ARGUMENT", "invalid activity type")
+        fields: Obj = {
+            "limit": min(50, max(1, int(limit))),
+            "types": ",".join(dict.fromkeys(types)),
+            "mode": "chrono_unreads" if unread_only else "chrono_reads_and_unreads",
+        }
+        if unread_only:
+            fields["unread_only"] = True
+        if cursor:
+            fields["cursor"] = assert_non_empty_string(cursor, "cursor", 2000)
+        res = await self._core.call_web_api("activity.feed", fields, RequestOpts(reason="fetchActivityFeed"))
+        entries: list[tuple[ActivityItem, tuple[str, str, str | None] | None]] = []
+        for raw in res.get("items") or []:
+            if not isinstance(raw, dict):
+                continue
+            item = _o(raw.get("item"))
+            type_ = _s(item.get("type"))
+            feed_ts = _s(raw.get("feed_ts"))
+            if not type_ or not feed_ts:
+                continue
+            entry = ActivityItem(
+                key=_s(raw.get("key")) or f"{type_}:{feed_ts}",
+                type=type_,
+                feed_ts=feed_ts,
+                is_unread=raw.get("is_unread") is True,
+            )
+            entries.append((entry, _activity_target(item)))
+        wanted: dict[str, list[str]] = {}
+        for _, target in entries:
+            if target:
+                wanted.setdefault(target[0], []).append(target[1])
+
+        async def no_messages() -> dict[str, dict[str, HistoryMessage]]:
+            return {}
+
+        messages, _ = await asyncio.gather(
+            _fetch_messages(self._core, self._h, wanted) if include_messages else no_messages(),
+            asyncio.gather(*(self._h.load_channel(id) for id in wanted), return_exceptions=True),
+        )
+        peers = [rec.im_user_id for id in wanted if (rec := self._h.peek_channel(id)) and rec.im_user_id]
+        await asyncio.gather(*(self._h.users.load(id) for id in peers), return_exceptions=True)
+        for entry, target in entries:
+            if not target:
+                continue
+            channel, ts, thread_ts = target
+            rec = self._h.peek_channel(channel)
+            ref = channel_ref(rec, channel)
+            if rec and rec.im_user_id and self._h.resolver.channel_name:
+                name = self._h.resolver.channel_name(channel)
+                if name:
+                    ref.name = name
+            message = messages.get(channel, {}).get(ts)
+            entry.channel = ref
+            entry.ts = ts
+            entry.thread_ts = thread_ts or (message.thread.root_ts if message and message.thread else None)
+            entry.message = message
+        return ActivityPage(
+            items=[e for e, _ in entries],
+            next_cursor=_s(_o(res.get("response_metadata")).get("next_cursor")),
+        )
+
+    async def iterate(
+        self,
+        types: Sequence[str],
+        *,
+        since: str | None = None,
+        unread_only: bool = False,
+        page_size: int = 20,
+        max_pages: int = 100,
+        include_messages: bool = True,
+    ) -> AsyncIterator[ActivityItem]:
+        """Iterates the feed newest → oldest, de-duplicated by key; stops at the first entry older than ``since``."""
+        if since is not None:
+            assert_ts(since, "since")
+        seen: set[str] = set()
+        cursor: str | None = None
+        for _ in range(max_pages):
+            res = await self.list(
+                types, limit=page_size, cursor=cursor, unread_only=unread_only, include_messages=include_messages
+            )
+            for item in res.items:
+                if since is not None and compare_ts(item.feed_ts, since) < 0:
+                    return
+                if item.key in seen:
+                    continue
+                seen.add(item.key)
+                yield item
+            if not res.next_cursor or res.next_cursor == cursor:
+                return
+            cursor = res.next_cursor

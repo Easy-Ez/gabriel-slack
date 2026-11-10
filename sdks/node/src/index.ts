@@ -22,6 +22,9 @@ export type { StreamController } from "./client/stream.js";
 export type { PresenceStatus, SubscriptionHandle } from "./client/presence.js";
 export { PRESENCE_FRAME_MAX_BYTES, PROFILE_POOL_CAP } from "./client/presence.js";
 export type {
+  ActivityItem,
+  ActivityType,
+  DirectConversation,
   FileInfo,
   HistoryMessage,
   SearchMessageHit,

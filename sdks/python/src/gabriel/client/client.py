@@ -43,7 +43,7 @@ from ..util.aio import AbortController, AbortSignal, spawn
 from ..util.logger import Logger, stdlib_logger
 from ..util.lru import LruCache
 from ..util.validate import compare_ts, is_subteam_id
-from .apis import ChannelsApi, ReactionsApi, SearchApi, ThreadsApi, UsersApi
+from .apis import ActivityApi, ChannelsApi, ReactionsApi, SearchApi, ThreadsApi, UsersApi
 from .chat import ChatApi, ChatSchedulerOptions, SendResult
 from .context import (
     MessageMatcher,
@@ -460,6 +460,7 @@ class GabrielClient:
         self.reactions = ReactionsApi(self.core)
         self.users = UsersApi(self._hydrator)
         self.channels = ChannelsApi(self.core, self._hydrator)
+        self.activity = ActivityApi(self.core, self._hydrator)
         self.presence = PresenceApi(self.core, self._hydrator, self._emit_synthetic, self._logger)
 
         self._handlers: dict[str, list[Handler]] = {}
@@ -667,6 +668,7 @@ class GabrielClient:
             reactions=self.reactions,
             users=self.users,
             channels=self.channels,
+            activity=self.activity,
             presence=self.presence,
             registry=self._registry,
             logger=self._logger,

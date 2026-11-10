@@ -551,3 +551,143 @@ describe("lifecycle", () => {
     expect(client.health().status).toBe("dead");
   });
 });
+
+describe("backfill reads", () => {
+  const DM = "D0ALICE0001";
+  const GROUP = "G0GROUP0001";
+  const rich = (elements: unknown[]) => [{ type: "rich_text", elements: [{ type: "rich_text_section", elements }] }];
+
+  function withDms(slack = new FakeSlack()) {
+    slack.on("client.dms", (f) =>
+      f.cursor
+        ? { ok: true, dms: [{ id: GROUP, latest: "1800000050.000100", channel: { id: GROUP, name: "mpdm-me--alice--bob-1", is_mpim: true, is_open: true } }], response_metadata: { next_cursor: "" } }
+        : {
+            ok: true,
+            dms: [
+              { id: DM, latest: "1800000100.000100", channel: { id: DM, is_im: true, user: "U0ALICE0001", is_open: false, last_read: "1800000001.000100" } },
+              { id: "D0BOB000001", channel: { id: "D0BOB000001", is_im: true, user: "U0BOB000001", is_open: true } },
+            ],
+            response_metadata: { next_cursor: "page2" },
+          },
+    );
+    return slack;
+  }
+
+  it("lists direct conversations with their latest activity", async () => {
+    const { slack, client } = await started(withDms());
+    const page = await client.channels.listDirect();
+    expect(page).toEqual({
+      items: [
+        { channel: { id: DM, name: "@Alice", isPrivate: true, isIm: true }, latestTs: "1800000100.000100", isOpen: false, peer: expect.objectContaining({ id: "U0ALICE0001", displayName: "Alice" }) },
+        { channel: { id: "D0BOB000001", name: "@Bob", isPrivate: true, isIm: true }, isOpen: true, peer: expect.objectContaining({ id: "U0BOB000001" }) },
+      ],
+      nextCursor: "page2",
+    });
+    expect(slack.callsTo("client.dms")[0]!.fields).toMatchObject({ count: "50", include_closed: "true", include_channel: "true" });
+
+    const recent: string[] = [];
+    for await (const d of client.channels.iterateDirect({ activeSince: "1800000040.000100" })) recent.push(d.channel.id);
+    expect(recent).toEqual([DM, GROUP]);
+    expect(slack.callsTo("client.dms").at(-1)!.fields.cursor).toBe("page2");
+    // Listing never marks, opens or closes a conversation.
+    expect(slack.calls.some((c) => /mark|conversations\.(open|close)/.test(c.method))).toBe(false);
+  });
+
+  it("history messages carry mentions, subtype and deletion state", async () => {
+    const slack = new FakeSlack();
+    slack.on("conversations.history", () => ({
+      ok: true,
+      has_more: false,
+      messages: [
+        { ts: "1800000003.000100", user: "U0ALICE0001", text: "<@U0SELF00001> and <!subteam^S0ONCALL001>", blocks: rich([{ type: "user", user_id: SELF }, { type: "text", text: " and " }, { type: "usergroup", usergroup_id: "S0ONCALL001" }]) },
+        { ts: "1800000002.000100", user: "U0BOB000001", subtype: "channel_join", text: "<@U0BOB000001> has joined the channel" },
+        { ts: "1800000001.000100", user: "U0ALICE0001", subtype: "tombstone", text: "This message was deleted." },
+      ],
+    }));
+    const { client } = await started(slack);
+    const { messages } = await client.channels.getHistory({ channel: "C0GENERAL01" });
+    expect(messages[0]).toMatchObject({
+      mentions: [
+        { kind: "user", id: SELF, name: "Me" },
+        { kind: "usergroup", id: "S0ONCALL001", name: "oncall", includesMe: true },
+      ],
+      mentionReasons: ["direct", "usergroup"],
+      isDeleted: false,
+    });
+    expect(messages[0]!.subtype).toBeUndefined();
+    expect(messages[1]).toMatchObject({ subtype: "channel_join", mentionReasons: [], isDeleted: false });
+    expect(messages[2]).toMatchObject({ subtype: "tombstone", isDeleted: true });
+  });
+
+  function withActivity(slack = new FakeSlack()) {
+    slack.channels.set(DM, { id: DM, is_im: true, user: "U0ALICE0001" });
+    slack.on("activity.feed", (f) =>
+      f.cursor
+        ? { ok: true, items: [{ key: "k3", feed_ts: "1700000000.000100", is_unread: false, item: { type: "at_user", message: { ts: "1700000000.000100", channel: "C0GENERAL01" } } }], response_metadata: { next_cursor: "" } }
+        : {
+            ok: true,
+            items: [
+              { key: "k1", feed_ts: "1800000009.000100", is_unread: true, item: { type: "at_user", message: { ts: "1800000009.000100", channel: "C0GENERAL01", thread_ts: "1800000005.000100", author_user_id: "U0ALICE0001" } } },
+              { key: "k2", feed_ts: "1800000008.000100", is_unread: false, item: { type: "dm", bundle_info: { payload: { dm_entry: { latest_message: { ts: "1800000008.000100", channel: DM } } } } } },
+              { key: "k4", feed_ts: "1800000007.000100", is_unread: false, item: { type: "at_user", message: { ts: "1800000007.000100", channel: "C0GENERAL01" } } },
+            ],
+            response_metadata: { next_cursor: "older" },
+          },
+    );
+    slack.on("messages.list", (f) => {
+      const ids = JSON.parse(f.message_ids!) as Array<{ channel: string; timestamps: string[] }>;
+      const stored: Record<string, Record<string, unknown>> = {
+        "1800000009.000100": { user: "U0ALICE0001", text: "<@U0SELF00001> ping", thread_ts: "1800000005.000100", blocks: rich([{ type: "user", user_id: SELF }, { type: "text", text: " ping" }]) },
+        "1800000008.000100": { user: "U0ALICE0001", text: "hello" },
+      };
+      return {
+        ok: true,
+        messages_data: Object.fromEntries(ids.map(({ channel, timestamps }) => [channel, { messages: timestamps.flatMap((ts) => (stored[ts] ? [{ ts, type: "message", ...stored[ts] }] : [])) }])),
+      };
+    });
+    return slack;
+  }
+
+  it("reads the activity feed and resolves entries to full messages", async () => {
+    const { slack, client } = await started(withActivity());
+    const page = await client.activity.list({ types: ["at_user", "dm"] });
+    expect(slack.callsTo("activity.feed")[0]!.fields).toMatchObject({ types: "at_user,dm", mode: "chrono_reads_and_unreads", limit: "20" });
+    expect(slack.callsTo("messages.list")).toHaveLength(1);
+    expect(page.nextCursor).toBe("older");
+    expect(page.items[0]).toMatchObject({
+      key: "k1",
+      type: "at_user",
+      isUnread: true,
+      channel: { id: "C0GENERAL01", name: "general" },
+      ts: "1800000009.000100",
+      threadTs: "1800000005.000100",
+      message: { sender: { id: "U0ALICE0001", displayName: "Alice" }, markdown: "@Me ping", mentionReasons: ["direct"], thread: { rootTs: "1800000005.000100" } },
+    });
+    expect(page.items[1]).toMatchObject({ type: "dm", channel: { id: DM, isIm: true, name: "@Alice" }, message: { markdown: "hello" } });
+    // The message behind k4 no longer exists: the entry stays, without a message.
+    expect(page.items[2]).toMatchObject({ key: "k4", ts: "1800000007.000100" });
+    expect(page.items[2]!.message).toBeUndefined();
+
+    const keys: string[] = [];
+    for await (const item of client.activity.iterate({ types: ["at_user", "dm"], since: "1750000000.000000" })) keys.push(item.key);
+    expect(keys).toEqual(["k1", "k2", "k4"]);
+    expect(slack.calls.some((c) => /^activity\.mark|conversations\.mark|subscriptions\.thread\.mark/.test(c.method))).toBe(false);
+    await expect(client.activity.list({ types: [] })).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+  });
+
+  it("fetches messages by timestamp", async () => {
+    const { client } = await started(withActivity());
+    const got = await client.channels.getMessages({ channel: "C0GENERAL01", timestamps: ["1800000009.000100", "1800000007.000100"] });
+    expect(got.map((m) => m.ts)).toEqual(["1800000009.000100"]);
+  });
+
+  it("applies the read allow-list to direct conversations, activity and fetched messages", async () => {
+    const { client } = await started(withActivity(withDms()));
+    const agent = client.scope({ read: { channels: [DM] }, write: { allowedActions: [] } });
+    expect((await agent.channels.listDirect()).items.map((d) => d.channel.id)).toEqual([DM]);
+    expect((await agent.activity.list({ types: ["at_user", "dm"] })).items.map((i) => i.key)).toEqual(["k2"]);
+    await expect(agent.channels.getMessages({ channel: "C0GENERAL01", timestamps: ["1800000009.000100"] })).rejects.toMatchObject({ code: "SCOPE_POLICY_VIOLATION" });
+    const open = client.scope({ write: { allowedActions: [] } });
+    expect((await open.activity.list({ types: ["at_user"] })).items).toHaveLength(3);
+  });
+});

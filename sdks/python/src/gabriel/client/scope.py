@@ -18,7 +18,12 @@ from .context import current_trigger
 if TYPE_CHECKING:
     from ..markdown.attribution import AttributionOverride
     from .apis import (
+        ActivityApi,
+        ActivityItem,
+        ActivityPage,
         ChannelsApi,
+        DirectConversation,
+        DirectPage,
         FileInfo,
         HistoryMessage,
         HistoryPage,
@@ -54,7 +59,8 @@ ApprovalHook = Callable[[str, dict[str, Any]], Awaitable[bool] | bool]
 
 @dataclass(kw_only=True, slots=True)
 class ReadPolicy:
-    #: Readable channel allow-list (history, thread context, file downloads, search hits).
+    #: Readable channel allow-list (history, thread context, file downloads, search hits,
+    #: direct conversations, activity).
     channels: Sequence[str] | None = None
     allow_search: bool = True
     max_file_download_bytes: int | None = None
@@ -439,15 +445,92 @@ class _ScopedChannels:
         oldest: str | None = None,
         latest: str | None = None,
         cursor: str | None = None,
+        inclusive: bool = False,
     ) -> HistoryPage:
         self._scope._check_read(channel)
-        return await self._channels.get_history(channel, limit=limit, oldest=oldest, latest=latest, cursor=cursor)
+        return await self._channels.get_history(
+            channel, limit=limit, oldest=oldest, latest=latest, cursor=cursor, inclusive=inclusive
+        )
 
     def iterate_history(
         self, channel: str, *, oldest: str | None = None, page_size: int = 100
     ) -> AsyncIterator[HistoryMessage]:
         self._scope._check_read(channel)
         return self._channels.iterate_history(channel, oldest=oldest, page_size=page_size)
+
+    async def get_messages(self, channel: str, timestamps: list[str]) -> list[HistoryMessage]:
+        self._scope._check_read(channel)
+        return await self._channels.get_messages(channel, timestamps)
+
+    async def list_direct(
+        self, *, limit: int = 50, cursor: str | None = None, include_closed: bool = True
+    ) -> DirectPage:
+        page = await self._channels.list_direct(limit=limit, cursor=cursor, include_closed=include_closed)
+        page.items = [d for d in page.items if self._scope._channel_allowed(d.channel.id)]
+        return page
+
+    async def iterate_direct(
+        self,
+        *,
+        active_since: str | None = None,
+        include_closed: bool = True,
+        page_size: int = 50,
+        max_pages: int = 50,
+    ) -> AsyncIterator[DirectConversation]:
+        async for d in self._channels.iterate_direct(
+            active_since=active_since, include_closed=include_closed, page_size=page_size, max_pages=max_pages
+        ):
+            if self._scope._channel_allowed(d.channel.id):
+                yield d
+
+
+class _ScopedActivity:
+    def __init__(self, scope: ScopedClient, activity: ActivityApi) -> None:
+        self._scope = scope
+        self._activity = activity
+
+    def _allowed(self, item: ActivityItem) -> bool:
+        # Under a channel allow-list, entries that point at no conversation are dropped too.
+        read = self._scope._policy.read
+        if read is None or read.channels is None:
+            return True
+        return item.channel is not None and item.channel.id in read.channels
+
+    async def list(
+        self,
+        types: Sequence[str],
+        *,
+        limit: int = 20,
+        cursor: str | None = None,
+        unread_only: bool = False,
+        include_messages: bool = True,
+    ) -> ActivityPage:
+        page = await self._activity.list(
+            types, limit=limit, cursor=cursor, unread_only=unread_only, include_messages=include_messages
+        )
+        page.items = [i for i in page.items if self._allowed(i)]
+        return page
+
+    async def iterate(
+        self,
+        types: Sequence[str],
+        *,
+        since: str | None = None,
+        unread_only: bool = False,
+        page_size: int = 20,
+        max_pages: int = 100,
+        include_messages: bool = True,
+    ) -> AsyncIterator[ActivityItem]:
+        async for item in self._activity.iterate(
+            types,
+            since=since,
+            unread_only=unread_only,
+            page_size=page_size,
+            max_pages=max_pages,
+            include_messages=include_messages,
+        ):
+            if self._allowed(item):
+                yield item
 
 
 class _ScopedPresence:
@@ -476,6 +559,7 @@ class ScopedClient:
         reactions: ReactionsApi,
         users: UsersApi,
         channels: ChannelsApi,
+        activity: ActivityApi,
         presence: PresenceApi,
         registry: SelfRegistry,
         logger: Logger,
@@ -491,6 +575,7 @@ class ScopedClient:
         self.reactions = _ScopedReactions(self, reactions)
         self.users = _ScopedUsers(users)
         self.channels = _ScopedChannels(self, channels)
+        self.activity = _ScopedActivity(self, activity)
         self.presence = _ScopedPresence(presence)
 
     @property
