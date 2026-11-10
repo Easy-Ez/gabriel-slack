@@ -6,6 +6,8 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-10
+
 ### Added
 - `client.channels.list_direct()` / `iterate_direct(active_since=…)`: your 1:1 and group direct
   conversations with the timestamp of their newest message, including closed ones.

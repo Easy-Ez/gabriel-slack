@@ -6,6 +6,8 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-10
+
 ### Added
 - `client.channels.listDirect()` / `iterateDirect({ activeSince })`: your 1:1 and group direct
   conversations with the timestamp of their newest message, including closed ones.

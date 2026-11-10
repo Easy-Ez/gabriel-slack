@@ -1,6 +1,6 @@
 [project]
 name = "gabriel-slack"
-version = "0.3.0"
+version = "0.4.0"
 description = "Typed, AI-friendly real-time SDK for the Slack Web client protocol (session token + cookie)"
 readme = "README.md"
 license = "MIT"
