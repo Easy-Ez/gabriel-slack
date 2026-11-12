@@ -6,6 +6,19 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `user.profile_changed` (`UserProfileChangedEvent`): a user's display name, real name or handle
+  changed (`changed`, `previous`). The user cache is updated first, so `users.resolve()` returns the
+  new values. Status- or avatar-only changes do not trigger it.
+- `presence.watch_profiles(user_ids)`: subscribe to profile changes only (no presence, no DND).
+  Slack pushes profile changes only for subscribed users; up to 900 per connection.
+
+### Changed
+- `presence.watch(…, track_profile_and_dnd=True)` and `watch_profiles` share the 900-user profile
+  pool; DND subscriptions are only sent for `track_profile_and_dnd` watchers.
+- `user.status_changed` keeps working after the user cache entry expires (the last record of each
+  subscribed user is kept while it is subscribed).
+
 ## [0.5.0] - 2026-11-12
 
 ### Added

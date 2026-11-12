@@ -24,8 +24,10 @@ from gabriel.events.types import (
     PresenceChangedEvent,
     ReactionAddedEvent,
     UnreadBadgeCountsEvent,
+    UserProfileChangedEvent,
 )
-from harness import SELF, FakeSlack, FileBody, make_client, message_frame, tick, until
+from harness import SELF, TEAM, FakeSlack, FileBody, make_client, message_frame, tick, until
+from test_conformance import _validator as schema_validator
 
 Started = Callable[..., Awaitable[tuple[FakeSlack, GabrielClient]]]
 
@@ -983,6 +985,172 @@ async def test_profile_pool_cap_reply_marks_pool_full(started: Started) -> None:
     assert client.presence._profile_full is True
     # A full pool stops after the refused subscribe request (no DND request for that batch).
     assert [f["subtype"] for f in subscribe_requests] == ["user_change_subscribe_request"]
+
+
+# ------------------------------------------------------------------------------ user.profile_changed
+
+
+def _ack_subscriptions(slack: FakeSlack) -> None:
+    loop = asyncio.get_running_loop()
+
+    def on_sent(frame: dict[str, Any]) -> None:
+        if frame.get("type") == "subscription_update":
+            reply = {"ok": True, "reply_to": frame["id"], "type": "subscription_update"}
+            loop.call_soon(slack.socket.deliver, reply)
+
+    slack.socket.on_sent(on_sent)
+
+
+def _alice(display_name: str, **profile: Any) -> dict[str, Any]:
+    return {
+        "id": "U0ALICE0001",
+        "name": "alice",
+        "team_id": TEAM,
+        "profile": {
+            "display_name": display_name,
+            "real_name": "Alice Example",
+            "status_text": "",
+            "status_emoji": "",
+            **profile,
+        },
+    }
+
+
+def _edge_user_ids(slack: FakeSlack, start: int = 0) -> list[list[str]]:
+    return [list(c.body["updated_ids"]) for c in slack.edge_calls[start:] if c.endpoint == "users/info"]
+
+
+async def _watching_profiles(started: Started) -> tuple[FakeSlack, GabrielClient, list[BaseEvent]]:
+    slack, client = await started()
+    _ack_subscriptions(slack)
+    events: list[BaseEvent] = []
+    client.on("user.profile_changed", lambda e, _ctx: events.append(e))
+    client.on("user.status_changed", lambda e, _ctx: events.append(e))
+    slack.users["U0ALICE0001"] = _alice("Alice")
+    await client.presence.watch_profiles(["U0ALICE0001"])
+    await until(lambda: any("U0ALICE0001" in ids for ids in _edge_user_ids(slack)))
+    await tick(0.02)
+    return slack, client, events
+
+
+async def test_profile_change_from_user_change_with_profile(started: Started) -> None:
+    slack, client, events = await _watching_profiles(started)
+    subtypes = [f["subtype"] for f in slack.socket.sent_of_type("subscription_update")]
+    assert subtypes == ["user_change_subscribe_request"]
+
+    edge_before = len(slack.edge_calls)
+    slack.socket.deliver({"type": "user_change", "user": _alice("Alice Renamed")})
+    await until(lambda: len(events) == 1)
+    await tick(0.03)
+    assert len(events) == 1
+    evt = events[0]
+    assert isinstance(evt, UserProfileChangedEvent)
+    assert evt.to_dict() == {
+        "type": "user.profile_changed",
+        "eventId": evt.event_id,
+        "user": {
+            "id": "U0ALICE0001",
+            "name": "alice",
+            "displayName": "Alice Renamed",
+            "realName": "Alice Example",
+            "handle": "alice",
+            "isBot": False,
+            "isExternal": False,
+        },
+        "changed": ["displayName"],
+        "previous": {"displayName": "Alice"},
+    }
+    schema_validator().validate(evt.to_dict())
+    assert len(slack.edge_calls) == edge_before  # the frame carried the profile: no refetch
+    ref = await client.users.resolve("U0ALICE0001")
+    assert ref is not None and ref.display_name == "Alice Renamed"
+
+
+async def test_profile_change_from_user_invalidated_refetches(started: Started) -> None:
+    slack, client, events = await _watching_profiles(started)
+    slack.socket.deliver({"type": "user_invalidated", "user": {"id": "U0ALICE0001"}})
+    await tick(0.08)
+    assert events == []  # refetched, nothing changed
+
+    slack.users["U0ALICE0001"] = {**_alice("Alice"), "name": "alice2"}
+    slack.socket.deliver({"type": "user_invalidated", "user": {"id": "U0ALICE0001"}})
+    await until(lambda: len(events) == 1)
+    evt = events[0]
+    assert isinstance(evt, UserProfileChangedEvent)
+    assert evt.changed == ["handle"]
+    assert evt.previous.handle == "alice"
+    assert evt.user.handle == "alice2"
+    ref = await client.users.resolve("U0ALICE0001")
+    assert ref is not None and ref.handle == "alice2"
+
+
+async def test_status_only_user_change_emits_no_profile_change(started: Started) -> None:
+    slack, _, events = await _watching_profiles(started)
+    slack.socket.deliver({"type": "user_change", "user": _alice("Alice", status_text="lunch", status_emoji=":taco:")})
+    await until(lambda: len(events) == 1)
+    await tick(0.03)
+    assert [e.TYPE for e in events] == ["user.status_changed"]  # type: ignore[attr-defined]
+
+
+async def test_profile_change_covers_cached_unsubscribed_users_only(started: Started) -> None:
+    slack, client = await started()
+    events: list[BaseEvent] = []
+    client.on("user.profile_changed", lambda e, _ctx: events.append(e))
+    await client.users.resolve("U0BOB000001")
+    edge_before = len(slack.edge_calls)
+
+    carol = {"id": "U0CAROL0001", "name": "carol", "profile": {"display_name": "Carol"}}
+    slack.socket.deliver({"type": "user_change", "user": carol})
+    slack.socket.deliver({"type": "user_invalidated", "user": {"id": "U0DAVE00001"}})
+    slack.users["U0BOB000001"] = {
+        "id": "U0BOB000001",
+        "name": "bob",
+        "team_id": TEAM,
+        "profile": {"display_name": "Robert"},
+    }
+    slack.socket.deliver({"type": "user_invalidated", "user": {"id": "U0BOB000001"}})
+    await until(lambda: len(events) == 1)
+    await tick(0.03)
+    evt = events[0]
+    assert isinstance(evt, UserProfileChangedEvent)
+    assert (evt.user.id, evt.user.display_name, evt.changed, evt.previous.display_name) == (
+        "U0BOB000001",
+        "Robert",
+        ["displayName"],
+        "Bob",
+    )
+    # Only Bob was refetched; Carol and Dave had no cached record to diff against.
+    assert _edge_user_ids(slack, edge_before) == [["U0BOB000001"]]
+    assert slack.socket.sent_of_type("subscription_update") == []
+
+
+async def test_dnd_subscriptions_follow_track_profile_and_dnd_only(started: Started) -> None:
+    slack, client = await started()
+    _ack_subscriptions(slack)
+    names = await client.presence.watch_profiles(["U0ALICE0001", "U0BOB000001"])
+    full = await client.presence.watch(["U0BOB000001"], track_profile_and_dnd=True)
+
+    def sent() -> list[tuple[str, list[str]]]:
+        return [(f["subtype"], f["ids"]) for f in slack.socket.sent_of_type("subscription_update")]
+
+    await until(lambda: any(st == "dnd_invalidated_subscribe_request" for st, _ in sent()))
+    await tick(0.03)
+    assert ("dnd_invalidated_subscribe_request", ["U0BOB000001"]) in sent()
+    assert all("U0ALICE0001" not in ids for st, ids in sent() if st == "dnd_invalidated_subscribe_request")
+
+    await full.unsubscribe()
+    await until(lambda: any(st == "dnd_invalidated_unsubscribe_request" for st, _ in sent()))
+    assert all(st != "user_change_unsubscribe_request" for st, _ in sent())  # still watched by `names`
+    await names.unsubscribe()
+    await until(lambda: any(st == "user_change_unsubscribe_request" for st, _ in sent()))
+    unsub = next(ids for st, ids in sent() if st == "user_change_unsubscribe_request")
+    assert sorted(unsub) == ["U0ALICE0001", "U0BOB000001"]
+
+
+async def test_watch_profiles_enforces_the_900_user_cap(started: Started) -> None:
+    _, client = await started()
+    ids = [f"U{i:010d}" for i in range(901)]
+    await expect_code(client.presence.watch_profiles(ids), "SUBSCRIPTION_CAP_EXCEEDED")
 
 
 async def test_suffixed_stream_context_exit_after_finish(started: Started) -> None:

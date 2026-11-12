@@ -458,6 +458,121 @@ describe("presence", () => {
   });
 });
 
+describe("user.profile_changed", () => {
+  type Slack = FakeSlack;
+  /** ACKs every subscription_update the client sends. */
+  function ackSubscriptions(slack: Slack): void {
+    slack.socket.on("sent", (f: { type?: string; id?: number }) => {
+      if (f.type === "subscription_update") setImmediate(() => slack.socket.deliver({ ok: true, reply_to: f.id, type: "subscription_update" }));
+    });
+  }
+  const alice = (displayName: string, extra: Record<string, unknown> = {}) => ({
+    id: "U0ALICE0001",
+    name: "alice",
+    team_id: "T0TEAM00001",
+    profile: { display_name: displayName, real_name: "Alice Example", status_text: "", status_emoji: "", ...extra },
+  });
+
+  async function watching(): Promise<{ slack: Slack; client: GabrielClient; events: Array<GabrielEvent> }> {
+    const { slack, client } = await started();
+    ackSubscriptions(slack);
+    const events: GabrielEvent[] = [];
+    client.on("user.profile_changed", (e) => void events.push(e));
+    client.on("user.status_changed", (e) => void events.push(e));
+    slack.users.set("U0ALICE0001", alice("Alice"));
+    await client.presence.watchProfiles(["U0ALICE0001"]);
+    await until(() => slack.edgeCalls.some((c) => c.endpoint === "users/info" && "U0ALICE0001" in (c.body.updated_ids as object)));
+    await tick(20);
+    return { slack, client, events };
+  }
+
+  it("subscribes user_change only, and emits once for a user_change carrying the new profile", async () => {
+    const { slack, client, events } = await watching();
+    const subtypes = slack.socket.sentOfType("subscription_update").map((f) => f.subtype);
+    expect(subtypes).toEqual(["user_change_subscribe_request"]);
+
+    const edgeBefore = slack.edgeCalls.length;
+    slack.socket.deliver({ type: "user_change", user: alice("Alice Renamed") });
+    await until(() => events.length === 1);
+    await tick(30);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "user.profile_changed",
+      user: { id: "U0ALICE0001", displayName: "Alice Renamed", realName: "Alice Example", handle: "alice", name: "alice" },
+      changed: ["displayName"],
+      previous: { displayName: "Alice" },
+    });
+    expect(slack.edgeCalls.length).toBe(edgeBefore); // the frame carried the profile: no refetch
+    expect(await client.users.resolve("U0ALICE0001")).toMatchObject({ displayName: "Alice Renamed" });
+  });
+
+  it("refetches on a user_invalidated without profile and emits only when a name changed", async () => {
+    const { slack, client, events } = await watching();
+    slack.socket.deliver({ type: "user_invalidated", user: { id: "U0ALICE0001" } });
+    await tick(80);
+    expect(events).toHaveLength(0); // refetched, nothing changed
+
+    slack.users.set("U0ALICE0001", { ...alice("Alice"), name: "alice2" });
+    slack.socket.deliver({ type: "user_invalidated", user: { id: "U0ALICE0001" } });
+    await until(() => events.length === 1);
+    expect(events[0]).toMatchObject({ type: "user.profile_changed", changed: ["handle"], previous: { handle: "alice" }, user: { handle: "alice2" } });
+    expect(await client.users.resolve("U0ALICE0001")).toMatchObject({ handle: "alice2" });
+  });
+
+  it("does not emit for a user_change that only changes the status", async () => {
+    const { slack, events } = await watching();
+    slack.socket.deliver({ type: "user_change", user: alice("Alice", { status_text: "lunch", status_emoji: ":taco:" }) });
+    await until(() => events.length === 1);
+    await tick(30);
+    expect(events.map((e) => e.type)).toEqual(["user.status_changed"]);
+  });
+
+  it("covers cached users that are not subscribed, and ignores unknown ones", async () => {
+    const { slack, client } = await started();
+    const events: GabrielEvent[] = [];
+    client.on("user.profile_changed", (e) => void events.push(e));
+    await client.users.resolve("U0BOB000001");
+    const edgeBefore = slack.edgeCalls.length;
+
+    slack.socket.deliver({ type: "user_change", user: { id: "U0CAROL0001", name: "carol", profile: { display_name: "Carol" } } });
+    slack.socket.deliver({ type: "user_invalidated", user: { id: "U0DAVE00001" } });
+    slack.users.set("U0BOB000001", { id: "U0BOB000001", name: "bob", team_id: "T0TEAM00001", profile: { display_name: "Robert" } });
+    slack.socket.deliver({ type: "user_invalidated", user: { id: "U0BOB000001" } });
+    await until(() => events.length === 1);
+    await tick(30);
+    expect(events[0]).toMatchObject({ user: { id: "U0BOB000001", displayName: "Robert" }, changed: ["displayName"], previous: { displayName: "Bob" } });
+    // Only Bob was refetched; Carol and Dave had no cached record to diff against.
+    expect(slack.edgeCalls.slice(edgeBefore).map((c) => Object.keys(c.body.updated_ids as object))).toEqual([["U0BOB000001"]]);
+    expect(slack.socket.sentOfType("subscription_update")).toHaveLength(0);
+    expect(slack.edgeCalls.slice(edgeBefore).flatMap((c) => Object.keys(c.body.updated_ids as object))).not.toContain("U0CAROL0001");
+  });
+
+  it("keeps DND subscriptions for trackProfileAndDnd watchers only", async () => {
+    const { slack, client } = await started();
+    ackSubscriptions(slack);
+    const names = await client.presence.watchProfiles(["U0ALICE0001", "U0BOB000001"]);
+    const full = await client.presence.watch(["U0BOB000001"], { trackProfileAndDnd: true });
+    await until(() => slack.socket.sentOfType("subscription_update").some((f) => f.subtype === "dnd_invalidated_subscribe_request"));
+    await tick(30);
+    const sent = () => slack.socket.sentOfType("subscription_update").map((f) => [f.subtype, f.ids]);
+    expect(sent()).toContainEqual(["dnd_invalidated_subscribe_request", ["U0BOB000001"]]);
+    expect(sent().flatMap(([st, ids]) => (st === "dnd_invalidated_subscribe_request" ? (ids as string[]) : []))).not.toContain("U0ALICE0001");
+
+    await full.unsubscribe();
+    await until(() => sent().some(([st]) => st === "dnd_invalidated_unsubscribe_request"));
+    expect(sent().some(([st]) => st === "user_change_unsubscribe_request")).toBe(false); // still watched by `names`
+    await names.unsubscribe();
+    await until(() => sent().some(([st]) => st === "user_change_unsubscribe_request"));
+    expect(sent().find(([st]) => st === "user_change_unsubscribe_request")![1]).toEqual(["U0ALICE0001", "U0BOB000001"]);
+  });
+
+  it("enforces the 900-user profile cap", async () => {
+    const { client } = await started();
+    const ids = Array.from({ length: 901 }, (_, i) => `U${String(i).padStart(10, "0")}`);
+    await expect(client.presence.watchProfiles(ids)).rejects.toMatchObject({ code: "SUBSCRIPTION_CAP_EXCEEDED" });
+  });
+});
+
 describe("scope sandbox", () => {
   it("allows trigger-thread writes and rejects everything else", async () => {
     const { slack, client } = await started();

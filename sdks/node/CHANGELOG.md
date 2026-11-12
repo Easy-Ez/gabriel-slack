@@ -6,6 +6,19 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `user.profile_changed`: a user's display name, real name or handle changed (`changed`,
+  `previous`). The user cache is updated first, so `users.resolve()` returns the new values.
+  Status- or avatar-only changes do not trigger it.
+- `presence.watchProfiles(userIds)`: subscribe to profile changes only (no presence, no DND).
+  Slack pushes profile changes only for subscribed users; up to 900 per connection.
+
+### Changed
+- `presence.watch(…, { trackProfileAndDnd: true })` and `watchProfiles` share the 900-user profile
+  pool; DND subscriptions are only sent for `trackProfileAndDnd` watchers.
+- `user.status_changed` keeps working after the user cache entry expires (the last record of each
+  subscribed user is kept while it is subscribed).
+
 ## [0.5.0] - 2026-11-12
 
 ### Added

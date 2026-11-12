@@ -121,6 +121,7 @@ for await (const evt of client.events()) {}                               // 拉
 | `message.other` | 尚未专门建模的消息子类型（`rawSubtype`、`rawFrame`） |
 | `ai.stream_updated` / `ai.stream_completed` | 其他 AI 应用的流式输出进行中 / 完成 |
 | `presence.changed` | 被关注的用户在 `active` / `away` 间切换（首次值带 `isInitialSnapshot: true`） |
+| `user.profile_changed` | 用户的显示名、真实姓名或 handle 变化（`changed` 列出变了哪些，`previous` 是旧值；需 `presence.watchProfiles`） |
 | `user.status_changed` / `user.dnd_changed` | 被关注用户的自定义状态 / 勿扰变化（需 `trackProfileAndDnd`） |
 | `user.subteam_updated` | 用户组成员变化 |
 | `interaction.typing` | 有人正在输入 |
@@ -185,7 +186,7 @@ client.on("message.created", async (evt, ctx) => {
 | `client.threads` | `getContext({ channel, threadTs, limit })`、`iterateReplies`、`markRead`、`subscribe`、`unsubscribe` |
 | `client.files` | `upload`、`downloadStream` / `downloadBuffer`（`maxBytes`）、`getInfo`、`delete` |
 | `client.search` | `messages`、`files`、`channels`、`people`、`iterateMessages`、`iterateFiles` |
-| `client.presence` | `watch(userIds, { trackProfileAndDnd })`、`getStatus(userId)` |
+| `client.presence` | `watch(userIds, { trackProfileAndDnd })`、`watchProfiles(userIds)`、`getStatus(userId)` |
 | `client.reactions` | `add`、`remove`（重复添加 / 移除不报错） |
 | `client.users` | `resolve(id \| ids)`、`getDnd` |
 | `client.channels` | `resolve`、`getHistory`、`iterateHistory`、`getMessages({ channel, timestamps })`、`listDirect` / `iterateDirect({ activeSince })`（我的私信与群聊及其最近活动时间） |
@@ -219,6 +220,13 @@ await handle.unsubscribe();               // 或：await using handle = await cl
 ```
 
 关注是引用计数的：多处关注同一人共享一份订阅，全部释放后才真正退订。单条连接的容量有上限（在线状态约 1,100 人，资料 / 勿扰 900 人），超出时 `watch()` 抛出 `SUBSCRIPTION_CAP_EXCEEDED`。
+
+**同步改名：** Slack 只对订阅过的用户推送资料变更，所以要先订阅界面上要显示的人（每条连接最多 900 人，与 `trackProfileAndDnd` 共用额度）。事件发出前 SDK 已更新缓存，之后 `users.resolve()` 直接拿到新名字；只改状态或头像不会触发。
+
+```typescript
+await client.presence.watchProfiles(["U0123456789", "U0987654321"]);
+client.on("user.profile_changed", (e) => names.set(e.user.id, e.user.displayName ?? e.user.handle));
+```
 
 ## 7. 接入 AI Agent 的安全护栏
 
@@ -487,6 +495,7 @@ client.on("connection.gap", (e) => { if (!e.recovered) warn("消息补拉不完�
 | SDK 发的消息没有触发 `message.created` | 本实例回声默认过滤 | 预期行为；确需接收设 `loopGuard.includeSelfMessages: true` |
 | 我在浏览器里随手发的消息触发了 AI | 本人消息 `origin: "self_other_client"` 会派发 | 在处理器里判断 `origin` |
 | 收不到某同事的上下线 | 没有 `presence.watch()`，或句柄已释放 | 检查句柄生命周期 |
+| 同事改了名字没收到 `user.profile_changed` | 没有订阅该用户的资料变更 | `presence.watchProfiles([...])` |
 | `markdown` 里还有 `<@U…>` | 实名解析超过 1s 预算 | `await ctx.hydrateRemaining()` |
 | 重启后收到一批 `delivery: "backfill"` | 持久化存储在补拉离线期间的消息 | 预期行为；不需要时按 `delivery` 过滤 |
 | AI 回复后我的未读红点没了 | 发消息会推进已读位置 | 开启 `preserveUnreadCursor: true` |

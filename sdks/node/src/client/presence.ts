@@ -1,11 +1,19 @@
 import type { GabrielCore } from "../core/core.js";
 import type { RawWsFrame } from "../core/types.js";
 import { GabrielError } from "../errors.js";
-import type { DndInfo, PresenceChangedEvent, UserDndChangedEvent, UserStatus, UserStatusChangedEvent } from "../events/types.js";
+import type {
+  DndInfo,
+  PresenceChangedEvent,
+  UserDndChangedEvent,
+  UserProfileChangedEvent,
+  UserProfileField,
+  UserStatus,
+  UserStatusChangedEvent,
+} from "../events/types.js";
 import { chunk } from "../util/async.js";
 import type { Logger } from "../util/logger.js";
 import { assertUserId } from "../util/validate.js";
-import { toUserRecord, type Hydrator } from "./hydrator.js";
+import { toUserRecord, type Hydrator, type UserRecord } from "./hydrator.js";
 
 /** Serialized `presence_sub` frames above this many bytes are silently dropped by the gateway (16 KiB). */
 export const PRESENCE_FRAME_MAX_BYTES = 16_000;
@@ -34,9 +42,22 @@ interface PresenceEntry {
 }
 
 type Emit = (
-  evt: PresenceChangedEvent | UserStatusChangedEvent | UserDndChangedEvent,
+  evt: PresenceChangedEvent | UserStatusChangedEvent | UserProfileChangedEvent | UserDndChangedEvent,
   laneKey: string,
 ) => void;
+
+const PROFILE_FIELDS: readonly UserProfileField[] = ["displayName", "realName", "handle"];
+
+/** Name fields that differ between two records; a field missing from `after` never counts. */
+export function profileChanges(before: UserRecord, after: UserRecord): UserProfileField[] {
+  return PROFILE_FIELDS.filter((f) => after[f] !== undefined && after[f] !== before[f]);
+}
+
+function userIdOf(user: unknown): string | undefined {
+  if (typeof user === "string") return user;
+  if (user && typeof user === "object" && typeof (user as { id?: unknown }).id === "string") return (user as { id: string }).id;
+  return undefined;
+}
 
 /** Byte length of the presence_sub frame for a set of ids (id field included). */
 export function presenceFrameBytes(ids: Iterable<string>): number {
@@ -48,13 +69,19 @@ export function presenceFrameBytes(ids: Iterable<string>): number {
  * (spec/behavior.md §7):
  * - presence pool: full-overwrite `presence_sub`, no ACK, debounced, <= 16,000 bytes/frame;
  * - profile/DND pool: incremental `subscription_update`, 100 ids/frame, ACKed, <= 900 ids.
+ *   `user_change` subscriptions come from `watchProfiles()` and `watch({ trackProfileAndDnd })`;
+ *   DND subscriptions only from the latter.
  * Desired sets are ref-counted; every `hello` starts a new epoch and replays both pools.
  */
 export class PresenceApi {
   private readonly presenceRefs = new Map<string, number>();
   private readonly profileRefs = new Map<string, number>();
+  private readonly dndRefs = new Map<string, number>();
   private presenceApplied = new Set<string>();
   private profileApplied = new Set<string>();
+  private dndApplied = new Set<string>();
+  /** Last known record of each profile-subscribed user; outlives the hydrator's cache TTL. */
+  private readonly baseline = new Map<string, UserRecord>();
   private readonly cache = new Map<string, PresenceEntry>();
   private readonly lastDnd = new Map<string, DndInfo>();
   private epoch = 0;
@@ -84,12 +111,7 @@ export class PresenceApi {
         `presence subscription would serialize to ${presenceFrameBytes(nextPresence)} bytes (> ${PRESENCE_FRAME_MAX_BYTES}); about 1,150 standard user IDs fit`,
       );
     }
-    if (track) {
-      const nextProfile = new Set([...this.profileRefs.keys(), ...ids]);
-      if (nextProfile.size > PROFILE_POOL_CAP) {
-        throw new GabrielError("SUBSCRIPTION_CAP_EXCEEDED", `profile/DND subscriptions would reach ${nextProfile.size} users (> ${PROFILE_POOL_CAP})`);
-      }
-    }
+    if (track) this.assertProfileCap(ids);
 
     const newlyPresence: string[] = [];
     for (const id of ids) {
@@ -101,7 +123,10 @@ export class PresenceApi {
         if (this.cache.get(id)?.epoch !== this.epoch) this.cache.delete(id);
       }
     }
-    if (track) for (const id of ids) this.profileRefs.set(id, (this.profileRefs.get(id) ?? 0) + 1);
+    if (track) {
+      this.retainProfiles(ids);
+      for (const id of ids) this.dndRefs.set(id, (this.dndRefs.get(id) ?? 0) + 1);
+    }
 
     // Users already snapshotted on this connection: the gateway will not re-push, so synthesize.
     queueMicrotask(() => {
@@ -129,17 +154,63 @@ export class PresenceApi {
             presenceChanged = true;
           } else this.presenceRefs.set(id, n);
           if (track) {
-            const p = (this.profileRefs.get(id) ?? 1) - 1;
-            if (p <= 0) this.profileRefs.delete(id);
-            else this.profileRefs.set(id, p);
+            const d = (this.dndRefs.get(id) ?? 1) - 1;
+            if (d <= 0) this.dndRefs.delete(id);
+            else this.dndRefs.set(id, d);
           }
         }
+        if (track) this.releaseProfiles(ids);
         if (presenceChanged) this.schedulePresence();
-        if (track) this.scheduleProfile();
       },
       [Symbol.asyncDispose]: () => handle.unsubscribe(),
     };
     return handle;
+  }
+
+  /**
+   * Subscribe to profile changes (`user_change`) of up to 900 users, without presence or DND.
+   * Slack pushes `user_change` only for subscribed users, so this is how an application gets
+   * `user.profile_changed` (and `user.status_changed`) for users it shows. Ref-counted.
+   */
+  async watchProfiles(userIds: string[]): Promise<SubscriptionHandle> {
+    if (!Array.isArray(userIds) || userIds.length === 0) throw new GabrielError("INVALID_ARGUMENT", "presence.watchProfiles: userIds must be a non-empty array");
+    const ids = [...new Set(userIds.map((u) => assertUserId(u)))];
+    this.assertProfileCap(ids);
+    this.retainProfiles(ids);
+    let released = false;
+    const handle: SubscriptionHandle = {
+      userIds: Object.freeze([...ids]),
+      unsubscribe: async () => {
+        if (released) return;
+        released = true;
+        this.releaseProfiles(ids);
+      },
+      [Symbol.asyncDispose]: () => handle.unsubscribe(),
+    };
+    return handle;
+  }
+
+  private assertProfileCap(ids: string[]): void {
+    const next = new Set([...this.profileRefs.keys(), ...ids]);
+    if (next.size > PROFILE_POOL_CAP) {
+      throw new GabrielError("SUBSCRIPTION_CAP_EXCEEDED", `profile/DND subscriptions would reach ${next.size} users (> ${PROFILE_POOL_CAP})`);
+    }
+  }
+
+  private retainProfiles(ids: string[]): void {
+    for (const id of ids) this.profileRefs.set(id, (this.profileRefs.get(id) ?? 0) + 1);
+    this.scheduleProfile();
+  }
+
+  private releaseProfiles(ids: string[]): void {
+    for (const id of ids) {
+      const p = (this.profileRefs.get(id) ?? 1) - 1;
+      if (p <= 0) {
+        this.profileRefs.delete(id);
+        this.baseline.delete(id);
+      } else this.profileRefs.set(id, p);
+    }
+    this.scheduleProfile();
   }
 
   /** Cached presence + profile status + DND for a user; fetches what is missing. */
@@ -167,6 +238,7 @@ export class PresenceApi {
     this.epoch = epoch;
     this.presenceApplied = new Set();
     this.profileApplied = new Set();
+    this.dndApplied = new Set();
     this.profileFull = false;
     if (this.presenceRefs.size > 0) this.flushPresence();
     if (this.profileRefs.size > 0) this.scheduleProfile();
@@ -190,8 +262,12 @@ export class PresenceApi {
       case "user_invalidated":
       case "user_status_changed": {
         const user = frame.user;
-        const id = typeof user === "string" ? user : user && typeof user === "object" ? (user as { id?: string }).id : undefined;
-        if (id && this.profileRefs.has(id)) void this.refreshProfile(id, user && typeof user === "object" && "profile" in user ? (user as Record<string, unknown>) : undefined);
+        const id = userIdOf(user);
+        if (!id) return true;
+        // Subscribed users always; any other user only when there is a cached record to diff against.
+        if (this.profileRefs.has(id) || this.hydrator.users.peek(id)) {
+          void this.refreshProfile(id, user && typeof user === "object" ? (user as Record<string, unknown>) : undefined);
+        }
         return true;
       }
       case "dnd_updated":
@@ -199,7 +275,7 @@ export class PresenceApi {
       case "dnd_invalidated": {
         const user = frame.user;
         const id = typeof user === "string" ? user : user && typeof user === "object" ? (user as { id?: string }).id : this.core.session.userId;
-        if (id && this.profileRefs.has(id)) void this.refreshDnd(id);
+        if (id && this.dndRefs.has(id)) void this.refreshDnd(id);
         return true;
       }
     }
@@ -286,25 +362,37 @@ export class PresenceApi {
   /** Incremental diff, 100 ids per frame, each frame ACKed before `applied` advances. */
   private async reconcileProfile(): Promise<void> {
     if (!this.core.ws.isConnected()) return;
-    const desired = new Set(this.profileRefs.keys());
-    const add = [...desired].filter((id) => !this.profileApplied.has(id));
-    const remove = [...this.profileApplied].filter((id) => !desired.has(id));
     const epoch = this.epoch;
-    for (const batch of chunk(remove, PROFILE_FRAME_BATCH)) {
+    const removeProfile = [...this.profileApplied].filter((id) => !this.profileRefs.has(id));
+    for (const batch of chunk(removeProfile, PROFILE_FRAME_BATCH)) {
       await this.sendSubscription("user_change_unsubscribe_request", batch);
-      await this.sendSubscription("dnd_invalidated_unsubscribe_request", batch);
       if (epoch !== this.epoch) return;
       for (const id of batch) this.profileApplied.delete(id);
     }
+    const removeDnd = [...this.dndApplied].filter((id) => !this.dndRefs.has(id));
+    for (const batch of chunk(removeDnd, PROFILE_FRAME_BATCH)) {
+      await this.sendSubscription("dnd_invalidated_unsubscribe_request", batch);
+      if (epoch !== this.epoch) return;
+      for (const id of batch) this.dndApplied.delete(id);
+    }
     if (this.profileFull) return;
-    for (const batch of chunk(add, PROFILE_FRAME_BATCH)) {
+    const addProfile = [...this.profileRefs.keys()].filter((id) => !this.profileApplied.has(id));
+    for (const batch of chunk(addProfile, PROFILE_FRAME_BATCH)) {
       const ok = await this.sendSubscription("user_change_subscribe_request", batch);
-      if (!ok) return;
+      if (!ok || epoch !== this.epoch) return;
+      for (const id of batch) this.profileApplied.add(id);
+      // Prime the baseline so the first change can be diffed against it.
+      void this.hydrator.users
+        .loadMany(batch)
+        .then((recs) => recs.forEach((r) => r && this.profileRefs.has(r.id) && !this.baseline.has(r.id) && this.baseline.set(r.id, r)))
+        .catch(() => {});
+    }
+    // DND subscriptions follow the user_change ones they belong to (a refused batch stops both).
+    const addDnd = [...this.dndRefs.keys()].filter((id) => !this.dndApplied.has(id) && this.profileApplied.has(id));
+    for (const batch of chunk(addDnd, PROFILE_FRAME_BATCH)) {
       await this.sendSubscription("dnd_invalidated_subscribe_request", batch);
       if (epoch !== this.epoch) return;
-      for (const id of batch) this.profileApplied.add(id);
-      // Prime caches so the first invalidation can be diffed against a baseline.
-      void this.hydrator.users.loadMany(batch).catch(() => {});
+      for (const id of batch) this.dndApplied.add(id);
       void this.hydrator.fetchDnd(batch).then((m) => Object.entries(m).forEach(([k, v]) => this.lastDnd.set(k, v))).catch(() => {});
     }
   }
@@ -334,15 +422,26 @@ export class PresenceApi {
     }
   }
 
+  /**
+   * Refreshes a user's record after `user_change` / `user_invalidated` / `user_status_changed`:
+   * a frame carrying a full user object (`name` + `profile`) is used as is, anything else is
+   * re-fetched. The hydrator cache is updated before any event is emitted.
+   */
   private async refreshProfile(userId: string, inline?: Record<string, unknown>): Promise<void> {
-    const before = this.hydrator.users.peek(userId);
+    const before = this.hydrator.users.peek(userId) ?? this.baseline.get(userId);
     try {
-      let after = inline && inline.profile ? undefined : await this.hydrator.users.load(userId, { fresh: true });
-      if (inline && inline.profile) {
-        after = toUserRecord({ id: userId, ...inline }, this.core.session.teamId);
+      let after: UserRecord | null;
+      if (inline && inline.profile && typeof inline.profile === "object" && typeof inline.name === "string") {
+        after = toUserRecord({ ...inline, id: userId }, this.core.session.teamId);
         this.hydrator.users.prime(userId, after);
+      } else {
+        after = await this.hydrator.users.load(userId, { fresh: true });
       }
       if (!after) return;
+      const subscribed = this.profileRefs.has(userId);
+      if (subscribed) this.baseline.set(userId, after);
+      if (before) this.emitProfileChange(userId, before, after);
+      if (!subscribed) return;
       const prev = before?.status;
       const cur = after.status;
       if (prev && prev.emoji === cur.emoji && prev.text === cur.text && prev.expiration === cur.expiration) return;
@@ -359,6 +458,21 @@ export class PresenceApi {
     } catch (err) {
       this.logger.debug({ err: String(err), userId }, "profile refetch failed");
     }
+  }
+
+  private emitProfileChange(userId: string, before: UserRecord, after: UserRecord): void {
+    const changed = profileChanges(before, after);
+    if (changed.length === 0) return;
+    const previous: UserProfileChangedEvent["previous"] = {};
+    for (const f of changed) if (before[f] !== undefined) previous[f] = before[f];
+    const user: UserProfileChangedEvent["user"] = { id: userId };
+    if (after.name) user.name = after.name;
+    if (after.displayName) user.displayName = after.displayName;
+    if (after.realName) user.realName = after.realName;
+    if (after.handle) user.handle = after.handle;
+    if (after.isBot !== undefined) user.isBot = after.isBot;
+    if (after.isExternal !== undefined) user.isExternal = after.isExternal;
+    this.emit({ type: "user.profile_changed", eventId: `user_profile:${userId}:${++this.seq}:${Date.now()}`, user, changed, previous }, userId);
   }
 
   private async refreshDnd(userId: string): Promise<void> {

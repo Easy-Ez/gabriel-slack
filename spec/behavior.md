@@ -98,7 +98,7 @@ any → BACKOFF → DISCONNECTED            any → CREDENTIAL_REFRESH → DISCO
 | `message_replied` | `message.thread_meta_updated` |
 | any other `message` subtype | `message.other` |
 | `presence_change`, `manual_presence_change` | `presence.changed` (after diffing, §7) |
-| `user_change` / `user_invalidated` → refetch profile | `user.status_changed` (status actually changed) |
+| `user_change` / `user_invalidated` / `user_status_changed` → refresh profile (§7.1) | `user.profile_changed` (display name, real name or handle actually changed), then `user.status_changed` (status actually changed, profile-subscribed users only) |
 | `dnd_updated*` / `dnd_invalidated` → `dnd.teamInfo` | `user.dnd_changed` (DND actually changed) |
 | `subteam_updated` / `subteam_members_changed` | `user.subteam_updated` |
 | `user_typing` | `interaction.typing` |
@@ -192,6 +192,26 @@ block rendered to Markdown; `review` is the block ID suffix when it is `confirme
   per connection. SDKs emit `isInitialSnapshot: true` for the first value, synthesize a
   snapshot for users already known on the current connection, and after reconnects emit
   only users whose presence actually changed.
+
+### 7.1 Profile changes
+
+* The gateway pushes `user_change` / `user_invalidated` only for users subscribed with
+  `user_change_subscribe_request` on the current connection (measured on the official web client:
+  every invalidation received was for a subscribed user; most frames are `user_invalidated` with
+  only `user.id`). `watchProfiles(ids)` subscribes users for profile changes only; `watch(ids,
+  { trackProfileAndDnd: true })` subscribes profile and DND. Both share the 900-ID pool; DND
+  subscriptions are sent only for `trackProfileAndDnd` watchers.
+* A frame whose `user` object has `name` and `profile` is used as the new record; any other frame
+  re-fetches the user (EdgeAPI `users/info`). The user cache is updated **before** any event is
+  emitted, so later events and `users.resolve()` see the new values.
+* Frames are processed for subscribed users and for users that already have a cached record; other
+  users are ignored (no lookup, no event).
+* `user.profile_changed` is emitted when `displayName`, `realName` or `handle` differs from the
+  previous record (a field missing from the new record never counts). `changed` lists the fields in
+  that order and `previous` holds their old values. No previous record → no event. The previous
+  record of a subscribed user is kept for as long as it is subscribed, independent of the cache TTL.
+* Status-only and avatar-only changes never produce `user.profile_changed`.
+* Processing is read-only: it never sends a write request.
 
 ## 8. Origin and loop protection
 

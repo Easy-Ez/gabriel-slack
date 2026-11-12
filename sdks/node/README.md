@@ -125,6 +125,7 @@ Every payload is plain JSON-serializable data (schema:
 | `message.other` | Message subtypes without a dedicated model (`rawSubtype`, `rawFrame`). |
 | `ai.stream_updated` / `ai.stream_completed` | Another AI app streams / finishes a reply. |
 | `presence.changed` | A watched user switched `active` ⇄ `away` (`isInitialSnapshot` for the first value). |
+| `user.profile_changed` | A user's display name, real name or handle changed (`changed`, `previous`; subscribe with `presence.watchProfiles`). |
 | `user.status_changed` / `user.dnd_changed` | A watched user's custom status / DND changed (`trackProfileAndDnd`). |
 | `user.subteam_updated` | A user group's members changed. |
 | `interaction.typing` | Someone is typing (optionally in a thread). |
@@ -183,7 +184,7 @@ Middleware wraps every handler: `client.use(async (evt, ctx, next) => { …; awa
 | `client.threads` | `getContext({ channel, threadTs, limit })` → messages, participants, `formattedTranscript`; `iterateReplies`, `markRead`, `subscribe`, `unsubscribe` |
 | `client.files` | `upload` (3-step, streaming), `downloadStream` / `downloadBuffer` (`maxBytes`, sign-in page detection), `getInfo`, `delete` |
 | `client.search` | `messages`, `files`, `channels`, `people`, `iterateMessages`, `iterateFiles` (highlight markers stripped, de-duplicated) |
-| `client.presence` | `watch(userIds, { trackProfileAndDnd })` → handle (`unsubscribe()` / `await using`), `getStatus(userId)` |
+| `client.presence` | `watch(userIds, { trackProfileAndDnd })` / `watchProfiles(userIds)` → handle (`unsubscribe()` / `await using`), `getStatus(userId)` |
 | `client.reactions` | `add`, `remove` (idempotent) |
 | `client.users` | `resolve(id \| ids)` (batched, cached, misses cached 10 min), `getDnd` |
 | `client.channels` | `resolve`, `getHistory`, `iterateHistory`, `getMessages({ channel, timestamps })`, `listDirect` / `iterateDirect({ activeSince })` (my 1:1 and group DMs with their latest activity) |
@@ -220,6 +221,15 @@ Sending behavior:
 
 Limits enforced client-side: presence watch frame ≤ 16,000 bytes (about 1,100–1,200 IDs),
 profile/DND watch ≤ 900 users; violations throw `SUBSCRIPTION_CAP_EXCEEDED`.
+
+**Name changes.** Slack pushes profile changes only for subscribed users, so subscribe the users
+your application shows (up to 900 per connection, shared with `trackProfileAndDnd`). Users that are
+not subscribed but already cached also produce the event if Slack happens to push a change for them.
+
+```ts
+await client.presence.watchProfiles(["U0ALICE0001", "U0BOB000001"]);
+client.on("user.profile_changed", (e) => names.set(e.user.id, e.user.displayName ?? e.user.handle));
+```
 
 ## AI safety
 
