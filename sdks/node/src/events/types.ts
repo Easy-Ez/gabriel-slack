@@ -177,6 +177,19 @@ export interface UserStatusChangedEvent extends BaseEvent {
   previousStatus?: UserStatus;
 }
 
+/** A user's display name, real name or handle changed (spec/behavior.md §6.1). */
+export type UserProfileField = "displayName" | "realName" | "handle";
+
+export interface UserProfileChangedEvent extends BaseEvent {
+  type: "user.profile_changed";
+  /** The user after the change. */
+  user: UserRef & { realName?: string };
+  /** Fields whose value changed, in this order: `displayName`, `realName`, `handle`. */
+  changed: UserProfileField[];
+  /** Previous values of the changed fields (absent when the field had no value). */
+  previous: { displayName?: string; realName?: string; handle?: string };
+}
+
 export interface UserDndChangedEvent extends BaseEvent {
   type: "user.dnd_changed";
   user: { id: string; displayName?: string; handle?: string };
@@ -338,6 +351,7 @@ export interface GabrielEventMap {
   "ai.stream_completed": AiStreamEvent;
   "presence.changed": PresenceChangedEvent;
   "user.status_changed": UserStatusChangedEvent;
+  "user.profile_changed": UserProfileChangedEvent;
   "user.dnd_changed": UserDndChangedEvent;
   "user.subteam_updated": UserSubteamUpdatedEvent;
   "interaction.typing": TypingEvent;

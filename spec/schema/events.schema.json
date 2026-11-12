@@ -32,6 +32,9 @@
       "$ref": "#/$defs/user.status_changed"
     },
     {
+      "$ref": "#/$defs/user.profile_changed"
+    },
+    {
       "$ref": "#/$defs/user.dnd_changed"
     },
     {
@@ -731,6 +734,83 @@
         "eventId",
         "user",
         "currentStatus"
+      ],
+      "additionalProperties": false
+    },
+    "user.profile_changed": {
+      "type": "object",
+      "description": "A user's display name, real name or handle changed. Emitted after the client's user cache holds the new values.",
+      "properties": {
+        "type": {
+          "const": "user.profile_changed"
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "user": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "displayName": {
+              "type": "string"
+            },
+            "realName": {
+              "type": "string"
+            },
+            "handle": {
+              "type": "string"
+            },
+            "isBot": {
+              "type": "boolean"
+            },
+            "isExternal": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        },
+        "changed": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "displayName",
+              "realName",
+              "handle"
+            ]
+          }
+        },
+        "previous": {
+          "type": "object",
+          "properties": {
+            "displayName": {
+              "type": "string"
+            },
+            "realName": {
+              "type": "string"
+            },
+            "handle": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "eventId",
+        "user",
+        "changed",
+        "previous"
       ],
       "additionalProperties": false
     },

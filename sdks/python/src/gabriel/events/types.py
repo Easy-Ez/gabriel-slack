@@ -317,6 +317,38 @@ class UserStatusChangedEvent(BaseEvent):
     previous_status: UserStatus | None = None
 
 
+#: A name field of :class:`UserProfileChangedEvent`.
+UserProfileField = Literal["displayName", "realName", "handle"]
+
+
+@dataclass(kw_only=True, slots=True)
+class UserProfileRef(UserRef):
+    """The user of a :class:`UserProfileChangedEvent`: :class:`UserRef` plus the real name."""
+
+    real_name: str | None = None
+
+
+@dataclass(kw_only=True, slots=True)
+class UserProfilePrevious(_Serializable):
+    """Previous values of the changed fields (``None`` when the field had no value)."""
+
+    display_name: str | None = None
+    real_name: str | None = None
+    handle: str | None = None
+
+
+@dataclass(kw_only=True, slots=True)
+class UserProfileChangedEvent(BaseEvent):
+    """A user's display name, real name or handle changed (spec/behavior.md §6.1)."""
+
+    TYPE: ClassVar[str] = "user.profile_changed"
+    #: The user after the change.
+    user: UserProfileRef
+    #: Fields whose value changed, in this order: ``displayName``, ``realName``, ``handle``.
+    changed: list[UserProfileField]
+    previous: UserProfilePrevious
+
+
 @dataclass(kw_only=True, slots=True)
 class UserDndChangedEvent(BaseEvent):
     TYPE: ClassVar[str] = "user.dnd_changed"
@@ -500,6 +532,7 @@ GabrielEvent = (
     | AiStreamCompletedEvent
     | PresenceChangedEvent
     | UserStatusChangedEvent
+    | UserProfileChangedEvent
     | UserDndChangedEvent
     | UserSubteamUpdatedEvent
     | TypingEvent
@@ -533,6 +566,7 @@ EVENT_CLASSES: dict[str, type[BaseEvent]] = {
         AiStreamCompletedEvent,
         PresenceChangedEvent,
         UserStatusChangedEvent,
+        UserProfileChangedEvent,
         UserDndChangedEvent,
         UserSubteamUpdatedEvent,
         TypingEvent,
@@ -636,6 +670,10 @@ __all__ = [
     "UnreadActivityEvent",
     "UnreadBadgeCountsEvent",
     "UserDndChangedEvent",
+    "UserProfileChangedEvent",
+    "UserProfileField",
+    "UserProfilePrevious",
+    "UserProfileRef",
     "UserRef",
     "UserStatus",
     "UserStatusChangedEvent",

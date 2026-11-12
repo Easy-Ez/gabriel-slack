@@ -16,6 +16,10 @@ from ..events.types import (
     DndInfo,
     PresenceChangedEvent,
     UserDndChangedEvent,
+    UserProfileChangedEvent,
+    UserProfileField,
+    UserProfilePrevious,
+    UserProfileRef,
     UserRef,
     UserStatus,
     UserStatusChangedEvent,
@@ -81,7 +85,24 @@ class _PresenceEntry:
     updated_at: float
 
 
-Emit = Callable[[PresenceChangedEvent | UserStatusChangedEvent | UserDndChangedEvent, str], None]
+Emit = Callable[
+    [PresenceChangedEvent | UserStatusChangedEvent | UserProfileChangedEvent | UserDndChangedEvent, str], None
+]
+
+_PROFILE_FIELDS: tuple[tuple[UserProfileField, str], ...] = (
+    ("displayName", "display_name"),
+    ("realName", "real_name"),
+    ("handle", "handle"),
+)
+
+
+def profile_changes(before: UserRecord, after: UserRecord) -> list[UserProfileField]:
+    """Name fields that differ between two records; a field missing from ``after`` never counts."""
+    return [
+        name
+        for name, attr in _PROFILE_FIELDS
+        if getattr(after, attr) is not None and getattr(after, attr) != getattr(before, attr)
+    ]
 
 
 def presence_frame_bytes(ids: Iterable[str]) -> int:
@@ -118,6 +139,8 @@ class PresenceApi:
 
     - presence pool: full-overwrite ``presence_sub``, no ACK, debounced, <= 16,000 bytes/frame;
     - profile/DND pool: incremental ``subscription_update``, 100 ids/frame, ACKed, <= 900 ids.
+      ``user_change`` subscriptions come from :meth:`watch_profiles` and
+      ``watch(track_profile_and_dnd=True)``; DND subscriptions only from the latter.
 
     Desired sets are ref-counted; every ``hello`` starts a new epoch and replays both pools.
     """
@@ -129,8 +152,12 @@ class PresenceApi:
         self._logger = logger
         self._presence_refs: dict[str, int] = {}
         self._profile_refs: dict[str, int] = {}
+        self._dnd_refs: dict[str, int] = {}
         self._presence_applied: set[str] = set()
         self._profile_applied: set[str] = set()
+        self._dnd_applied: set[str] = set()
+        #: Last known record of each profile-subscribed user; outlives the hydrator's cache TTL.
+        self._baseline: dict[str, UserRecord] = {}
         self._cache: dict[str, _PresenceEntry] = {}
         self._last_dnd: dict[str, DndInfo] = {}
         self._epoch = 0
@@ -158,12 +185,7 @@ class PresenceApi:
                 "about 1,150 standard user IDs fit",
             )
         if track:
-            next_profile = set(self._profile_refs) | set(ids)
-            if len(next_profile) > PROFILE_POOL_CAP:
-                raise GabrielError(
-                    "SUBSCRIPTION_CAP_EXCEEDED",
-                    f"profile/DND subscriptions would reach {len(next_profile)} users (> {PROFILE_POOL_CAP})",
-                )
+            self._assert_profile_cap(ids)
 
         newly_presence: list[str] = []
         for id in ids:
@@ -177,7 +199,7 @@ class PresenceApi:
                     del self._cache[id]
         if track:
             for id in ids:
-                self._profile_refs[id] = self._profile_refs.get(id, 0) + 1
+                self._dnd_refs[id] = self._dnd_refs.get(id, 0) + 1
 
         # Users already snapshotted on this connection: the gateway will not re-push, so synthesize.
         def synthesize() -> None:
@@ -190,7 +212,7 @@ class PresenceApi:
         if newly_presence:
             self._schedule_presence()
         if track:
-            self._schedule_profile()
+            self._retain_profiles(ids)
 
         def release() -> None:
             presence_changed = False
@@ -202,17 +224,54 @@ class PresenceApi:
                 else:
                     self._presence_refs[id] = n
                 if track:
-                    p = self._profile_refs.get(id, 1) - 1
-                    if p <= 0:
-                        self._profile_refs.pop(id, None)
+                    d = self._dnd_refs.get(id, 1) - 1
+                    if d <= 0:
+                        self._dnd_refs.pop(id, None)
                     else:
-                        self._profile_refs[id] = p
+                        self._dnd_refs[id] = d
+            if track:
+                self._release_profiles(ids)
             if presence_changed:
                 self._schedule_presence()
-            if track:
-                self._schedule_profile()
 
         return SubscriptionHandle(ids, release)
+
+    async def watch_profiles(self, user_ids: list[str]) -> SubscriptionHandle:
+        """Subscribe to profile changes (``user_change``) of up to 900 users, without presence or DND.
+
+        Slack pushes ``user_change`` / ``user_invalidated`` only for subscribed users, so this is how
+        an application gets ``user.profile_changed`` (and ``user.status_changed``) for the users it
+        shows. Ref-counted.
+        """
+        if not isinstance(user_ids, list | tuple) or len(user_ids) == 0:
+            raise GabrielError("INVALID_ARGUMENT", "presence.watch_profiles: user_ids must be a non-empty list")
+        ids = list(dict.fromkeys(assert_user_id(u) for u in user_ids))
+        self._assert_profile_cap(ids)
+        self._retain_profiles(ids)
+        return SubscriptionHandle(ids, lambda: self._release_profiles(ids))
+
+    def _assert_profile_cap(self, ids: list[str]) -> None:
+        size = len(set(self._profile_refs) | set(ids))
+        if size > PROFILE_POOL_CAP:
+            raise GabrielError(
+                "SUBSCRIPTION_CAP_EXCEEDED",
+                f"profile/DND subscriptions would reach {size} users (> {PROFILE_POOL_CAP})",
+            )
+
+    def _retain_profiles(self, ids: list[str]) -> None:
+        for id in ids:
+            self._profile_refs[id] = self._profile_refs.get(id, 0) + 1
+        self._schedule_profile()
+
+    def _release_profiles(self, ids: list[str]) -> None:
+        for id in ids:
+            p = self._profile_refs.get(id, 1) - 1
+            if p <= 0:
+                self._profile_refs.pop(id, None)
+                self._baseline.pop(id, None)
+            else:
+                self._profile_refs[id] = p
+        self._schedule_profile()
 
     async def get_status(self, user_id: str) -> PresenceStatus:
         """Cached presence + profile status + DND for a user; fetches what is missing."""
@@ -251,6 +310,7 @@ class PresenceApi:
         self._epoch = epoch
         self._presence_applied = set()
         self._profile_applied = set()
+        self._dnd_applied = set()
         self._profile_full = False
         if self._presence_refs:
             self._flush_presence()
@@ -275,9 +335,9 @@ class PresenceApi:
         if t in ("user_change", "user_invalidated", "user_status_changed"):
             user = frame.get("user")
             id = user if isinstance(user, str) else user.get("id") if isinstance(user, dict) else None
-            if isinstance(id, str) and id in self._profile_refs:
-                inline = user if isinstance(user, dict) and "profile" in user else None
-                spawn(self._refresh_profile(id, inline), self._tasks)
+            # Subscribed users always; any other user only when there is a cached record to diff against.
+            if isinstance(id, str) and (id in self._profile_refs or self._hydrator.users.peek(id) is not None):
+                spawn(self._refresh_profile(id, user if isinstance(user, dict) else None), self._tasks)
             return True
         if t in ("dnd_updated", "dnd_updated_user", "dnd_invalidated"):
             user = frame.get("user")
@@ -287,7 +347,7 @@ class PresenceApi:
                 id = user.get("id")
             else:
                 id = self._core.session.user_id
-            if isinstance(id, str) and id in self._profile_refs:
+            if isinstance(id, str) and id in self._dnd_refs:
                 spawn(self._refresh_dnd(id), self._tasks)
             return True
         return False
@@ -380,35 +440,48 @@ class PresenceApi:
         """Incremental diff, 100 ids per frame, each frame ACKed before ``applied`` advances."""
         if not self._core.ws.is_connected():
             return
-        desired = list(self._profile_refs)
-        add = [id for id in desired if id not in self._profile_applied]
-        remove = [id for id in self._profile_applied if id not in self._profile_refs]
         epoch = self._epoch
-        for batch in chunk(remove, _PROFILE_FRAME_BATCH):
+        remove_profile = [id for id in self._profile_applied if id not in self._profile_refs]
+        for batch in chunk(remove_profile, _PROFILE_FRAME_BATCH):
             await self._send_subscription("user_change_unsubscribe_request", batch)
+            if epoch != self._epoch:
+                return
+            self._profile_applied.difference_update(batch)
+        remove_dnd = [id for id in self._dnd_applied if id not in self._dnd_refs]
+        for batch in chunk(remove_dnd, _PROFILE_FRAME_BATCH):
             await self._send_subscription("dnd_invalidated_unsubscribe_request", batch)
             if epoch != self._epoch:
                 return
-            for id in batch:
-                self._profile_applied.discard(id)
+            self._dnd_applied.difference_update(batch)
         if self._profile_full:
             return
-        for batch in chunk(add, _PROFILE_FRAME_BATCH):
+        add_profile = [id for id in self._profile_refs if id not in self._profile_applied]
+        for batch in chunk(add_profile, _PROFILE_FRAME_BATCH):
             ok = await self._send_subscription("user_change_subscribe_request", batch)
-            if not ok:
+            if not ok or epoch != self._epoch:
                 return
+            self._profile_applied.update(batch)
+            # Prime the baseline so the first change can be diffed against it.
+            spawn(self._prime_users(batch), self._tasks)
+        # DND subscriptions follow the user_change ones they belong to (a refused batch stops both).
+        add_dnd = [id for id in self._dnd_refs if id not in self._dnd_applied and id in self._profile_applied]
+        for batch in chunk(add_dnd, _PROFILE_FRAME_BATCH):
             await self._send_subscription("dnd_invalidated_subscribe_request", batch)
             if epoch != self._epoch:
                 return
-            self._profile_applied.update(batch)
-            # Prime caches so the first invalidation can be diffed against a baseline.
-            spawn(self._prime(batch), self._tasks)
+            self._dnd_applied.update(batch)
+            spawn(self._prime_dnd(batch), self._tasks)
 
-    async def _prime(self, batch: list[str]) -> None:
+    async def _prime_users(self, batch: list[str]) -> None:
         try:
-            await self._hydrator.users.load_many(batch)
+            records = await self._hydrator.users.load_many(batch)
         except Exception:
-            pass
+            return
+        for rec in records:
+            if rec is not None and rec.id in self._profile_refs:
+                self._baseline.setdefault(rec.id, rec)
+
+    async def _prime_dnd(self, batch: list[str]) -> None:
         try:
             self._last_dnd.update(await self._hydrator.fetch_dnd(batch))
         except Exception:
@@ -436,15 +509,27 @@ class PresenceApi:
             raise
 
     async def _refresh_profile(self, user_id: str, inline: dict[str, Any] | None = None) -> None:
-        before = self._hydrator.users.peek(user_id)
+        """Refreshes a user's record after ``user_change`` / ``user_invalidated`` / ``user_status_changed``.
+
+        A frame carrying a full user object (``name`` + ``profile``) is used as is, anything else is
+        re-fetched. The hydrator cache is updated before any event is emitted.
+        """
+        before = self._hydrator.users.peek(user_id) or self._baseline.get(user_id)
         try:
             after: UserRecord | None
-            if inline is not None and inline.get("profile"):
-                after = to_user_record({"id": user_id, **inline}, self._core.session.team_id)
+            if inline is not None and isinstance(inline.get("profile"), dict) and isinstance(inline.get("name"), str):
+                after = to_user_record({**inline, "id": user_id}, self._core.session.team_id)
                 self._hydrator.users.prime(user_id, after)
             else:
                 after = await self._hydrator.users.load(user_id, fresh=True)
             if after is None:
+                return
+            subscribed = user_id in self._profile_refs
+            if subscribed:
+                self._baseline[user_id] = after
+            if before is not None:
+                self._emit_profile_change(user_id, before, after)
+            if not subscribed:
                 return
             prev = before.status if before is not None else None
             cur = after.status
@@ -462,6 +547,31 @@ class PresenceApi:
             )
         except Exception as err:
             self._logger.debug({"err": str(err), "user_id": user_id}, "profile refetch failed")
+
+    def _emit_profile_change(self, user_id: str, before: UserRecord, after: UserRecord) -> None:
+        changed = profile_changes(before, after)
+        if not changed:
+            return
+        names = dict(_PROFILE_FIELDS)
+        previous = UserProfilePrevious(**{names[f]: getattr(before, names[f]) for f in changed})
+        self._seq += 1
+        self._emit(
+            UserProfileChangedEvent(
+                event_id=f"user_profile:{user_id}:{self._seq}:{int(time.time() * 1000)}",
+                user=UserProfileRef(
+                    id=user_id,
+                    name=after.name or None,
+                    display_name=after.display_name or None,
+                    real_name=after.real_name or None,
+                    handle=after.handle or None,
+                    is_bot=after.is_bot,
+                    is_external=after.is_external,
+                ),
+                changed=changed,
+                previous=previous,
+            ),
+            user_id,
+        )
 
     async def _refresh_dnd(self, user_id: str) -> None:
         try:

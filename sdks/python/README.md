@@ -148,6 +148,7 @@ fields; `evt.to_dict()` / `evt.to_json()` produce the schema form. Select events
 | `message.other` | `MessageOtherEvent` | Message subtypes without a dedicated model. |
 | `ai.stream_updated` / `ai.stream_completed` | `AiStreamUpdatedEvent` / `AiStreamCompletedEvent` | Another AI app streams / finishes a reply. |
 | `presence.changed` | `PresenceChangedEvent` | A watched user switched `active` ⇄ `away` (`is_initial_snapshot` for the first value). |
+| `user.profile_changed` | `UserProfileChangedEvent` | A user's display name, real name or handle changed (`changed`, `previous`; subscribe with `presence.watch_profiles`). |
 | `user.status_changed` / `user.dnd_changed` | `UserStatusChangedEvent` / `UserDndChangedEvent` | A watched user's custom status / DND changed. |
 | `user.subteam_updated` | `UserSubteamUpdatedEvent` | A user group's members changed. |
 | `interaction.typing` | `TypingEvent` | Someone is typing. |
@@ -205,7 +206,7 @@ reaching other handlers. Handlers for one channel run one at a time in arrival o
 | `client.threads` | `get_context(channel, thread_ts, limit=50)` → messages, participants, `formatted_transcript`; `iterate_replies`, `mark_read`, `subscribe`, `unsubscribe` |
 | `client.files` | `upload(filename, content, …)` (3-step, streaming), `download_stream` / `download_bytes` (`max_bytes`, sign-in page detection), `get_info`, `delete` |
 | `client.search` | `messages`, `files`, `channels`, `people`, `iterate_messages`, `iterate_files` |
-| `client.presence` | `watch(user_ids, track_profile_and_dnd=False)` → handle (`await h.unsubscribe()` / `async with`), `get_status(user_id)` |
+| `client.presence` | `watch(user_ids, track_profile_and_dnd=False)` / `watch_profiles(user_ids)` → handle (`await h.unsubscribe()` / `async with`), `get_status(user_id)` |
 | `client.reactions` | `add(channel, ts, emoji)`, `remove` (idempotent) |
 | `client.users` | `resolve(id or ids)` (batched, cached), `get_dnd` |
 | `client.channels` | `resolve`, `get_history`, `iterate_history`, `get_messages(channel, timestamps)`, `list_direct` / `iterate_direct(active_since=…)` (my 1:1 and group DMs with their latest activity) |
