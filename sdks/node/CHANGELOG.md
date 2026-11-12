@@ -6,6 +6,8 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-12
+
 ### Added
 - `user.profile_changed`: a user's display name, real name or handle changed (`changed`,
   `previous`). The user cache is updated first, so `users.resolve()` returns the new values.
