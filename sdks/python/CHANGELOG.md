@@ -6,6 +6,8 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
 ### Added
 - `HydrationOptions.backfill_budget` (default 5.0 s): how long a gap recovery waits for the names
   of all its messages before dispatching them. `0` skips the shared lookup.

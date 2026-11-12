@@ -6,6 +6,8 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-12
+
 ### Added
 - `hydration.backfillBudgetMs` (default 5000): how long a gap recovery waits for the names of all
   its messages before dispatching them. `0` skips the shared lookup.

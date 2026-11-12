@@ -1,6 +1,6 @@
 {
   "name": "gabriel-slack",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Typed, AI-friendly real-time SDK for the Slack Web client protocol (session token + cookie)",
   "license": "MIT",
   "author": "EzEasy (https://wecando.cc)",
