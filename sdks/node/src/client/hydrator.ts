@@ -82,7 +82,10 @@ export function toDndInfo(raw: Obj): DndInfo {
 }
 
 export interface HydrationResult {
+  /** False when the budget ran out before every lookup finished. */
   complete: boolean;
+  /** Re-renders the draft with the names known now (no-op once complete). */
+  refresh(): void;
   /** Completes all lookups and re-renders the draft. */
   remaining(): Promise<void>;
 }
@@ -239,11 +242,11 @@ export class Hydrator {
     return root;
   }
 
-  /** Starts entity lookups for a draft and renders it within `budgetMs`. */
-  hydrate(draft: Draft, budgetMs: number): Promise<HydrationResult> {
+  /** Lookups for the users and channels a draft names that are not cached yet. */
+  private entityLookups(needs: Draft["needs"]): Array<Promise<unknown>> {
     const tasks: Array<Promise<unknown>> = [];
-    for (const id of draft.needs.users) if (this.users.peek(id) === undefined) tasks.push(this.users.load(id));
-    for (const id of draft.needs.channels) {
+    for (const id of needs.users) if (this.users.peek(id) === undefined) tasks.push(this.users.load(id));
+    for (const id of needs.channels) {
       if (this.peekChannel(id) === undefined) {
         tasks.push(
           this.loadChannel(id).then((ch) => {
@@ -253,6 +256,33 @@ export class Hydrator {
         );
       }
     }
+    return tasks;
+  }
+
+  private settle(tasks: Array<Promise<unknown>>): Promise<void> {
+    return Promise.allSettled(tasks).then((results) => {
+      for (const r of results) if (r.status === "rejected") this.logger.debug({ err: String(r.reason) }, "hydration lookup failed");
+    });
+  }
+
+  /**
+   * Resolves the names a batch of drafts needs, in shared batched requests, waiting at most
+   * `budgetMs`. Gap recovery calls it before dispatching so backfilled events find a warm cache.
+   */
+  async preload(drafts: Draft[], budgetMs: number): Promise<void> {
+    const tasks = drafts.flatMap((d) => this.entityLookups(d.needs));
+    if (tasks.length === 0 || budgetMs <= 0) return;
+    let timer: NodeJS.Timeout | undefined;
+    const budget = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, budgetMs);
+    });
+    await Promise.race([this.settle(tasks), budget]);
+    clearTimeout(timer);
+  }
+
+  /** Starts entity lookups for a draft and renders it within `budgetMs`. */
+  hydrate(draft: Draft, budgetMs: number): Promise<HydrationResult> {
+    const tasks = this.entityLookups(draft.needs);
     const target = draft.reactionTarget;
     if (target) {
       tasks.push(
@@ -261,19 +291,30 @@ export class Hydrator {
         }),
       );
     }
-    const all = Promise.allSettled(tasks).then((results) => {
-      for (const r of results) if (r.status === "rejected") this.logger.debug({ err: String(r.reason) }, "hydration lookup failed");
+    let settled = tasks.length === 0;
+    const all = this.settle(tasks).then(() => {
+      settled = true;
     });
-    const finish = (complete: boolean): HydrationResult => {
+    const render = (): void => {
       try {
         draft.render(this.resolver);
       } catch (err) {
         this.logger.error({ err: String(err) }, "render failed");
       }
+    };
+    const finish = (complete: boolean): HydrationResult => {
+      render();
+      let upToDate = complete;
       return {
         complete,
+        refresh: () => {
+          if (upToDate) return;
+          upToDate = settled;
+          render();
+        },
         remaining: async () => {
           await all;
+          upToDate = true;
           draft.render(this.resolver);
         },
       };

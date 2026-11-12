@@ -123,8 +123,9 @@ and stay available as raw frames.
 ### 6.3 Pipeline and ordering
 
 1. Hydration (names, mentions, Markdown) starts immediately when a frame arrives, with a
-   **300 ms** budget; on timeout the event is delivered with what resolved, and unresolved
-   mentions keep their raw `<@U…>` form.
+   **1000 ms** budget; on timeout the event is delivered with what resolved, and unresolved
+   mentions keep their raw `<@U…>` form. An event that timed out is rendered again with the names
+   known by then when it leaves its lane and when each handler starts.
 2. **Dispatch order** per `laneKey` equals arrival order regardless of hydration timing.
 3. Handlers run in a bounded executor: global concurrency **32**, per key **1**, queue
    **5000**, in-flight bound **10,000**. Excess events are dropped with `guard.overflow`
@@ -277,8 +278,9 @@ default and is a self-declared display hint: any client can write the same block
 * Cold reconnect / restart with persisted state: buffer realtime frames, call `client.counts`,
   fetch `conversations.history(oldest = watermark)` for channels whose `latest` is newer
   (bounded pages), fetch `conversations.replies(oldest = threadWatermark)` for watched threads
-  (thread replies never appear in channel history), deliver recovered messages with
-  `delivery: "backfill"` in timestamp order before the buffered realtime frames, de-duplicate
+  (thread replies never appear in channel history), look up the names of all recovered messages
+  together (waiting at most **5 s**, independent of the per-event budget), deliver recovered
+  messages with `delivery: "backfill"` in timestamp order before the buffered realtime frames, de-duplicate
   by `eventId`, and emit `connection.gap`.
 * Fast reconnect: become ready immediately, then reconcile once after **2 s** the same way.
 * `connection.gap.recovered === false` lists every unrecovered range with a reason.

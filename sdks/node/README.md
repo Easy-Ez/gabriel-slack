@@ -163,7 +163,7 @@ client.on("message.created", async (evt, ctx) => {
   const s = await ctx.replyStream(); // streaming reply in the trigger's thread
   await ctx.react("eyes");
   const answer = await ctx.waitForReply((r) => r.threadTs === evt.ts, { timeoutMs: 60_000 }); // null on timeout
-  await ctx.hydrateRemaining();     // finish name resolution if the 300 ms budget ran out
+  await ctx.hydrateRemaining();     // finish name resolution if the 1 s budget ran out
 });
 ```
 
@@ -294,7 +294,8 @@ the same block: treat it as a display hint, never as proof of who wrote a messag
 ## Reliability
 
 * **Ordering**: events are dispatched per channel in arrival order even though entity lookups
-  run in parallel (budget 300 ms; unresolved mentions stay as `<@U…>`).
+  run in parallel (budget 1 s per event, 5 s for a whole backfill; unresolved mentions stay as
+  `<@U…>`).
 * **De-duplication** by `eventId` (`{channel}:{ts}:created`, `{channel}:{ts}:updated:{eventTs}`, …).
 * **Recovery**: watermarks advance only for messages whose handlers finished. After a cold reconnect,
   or a restart with a persistent store, missed channel messages and replies in watched threads
@@ -351,7 +352,7 @@ new GabrielClient({
   auth: { cookieD, token?, workspace?, allowedTeams? },
   concurrency: { globalConcurrency: 32, perKeyConcurrency: 1, maxQueue: 5000, maxInflightEvents: 10_000,
                  executorKey: "channel", handlerTimeoutMs: 300_000 },
-  hydration: { hydrateBudgetMs: 300, preloadUsergroups: true },
+  hydration: { hydrateBudgetMs: 1_000, backfillBudgetMs: 5_000, preloadUsergroups: true },
   loopGuard: { includeSelfMessages: false, maxAutoRepliesPerMinute: 5 },
   chat: { globalSendConcurrency: 4, itemDeadlineMs: 30_000, streamUpdatesPerSecond: 2,
           streamMinIntervalMs: 500, interruptedNotice: "\n\n_(interrupted)_" },

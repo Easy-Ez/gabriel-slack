@@ -167,7 +167,7 @@ client.on("message.created", async (evt, ctx) => {
   const stream = await ctx.replyStream({ initialMarkdown: "_生成中…_" });
   await ctx.react("eyes");
   const answer = await ctx.waitForReply((r) => r.threadTs === evt.ts, { timeoutMs: 60_000 }); // 超时返回 null
-  await ctx.hydrateRemaining();       // 若实名解析超过 300ms 预算，按需补全
+  await ctx.hydrateRemaining();       // 若实名解析超过 1s 预算，按需补全
 });
 ```
 
@@ -374,7 +374,7 @@ new GabrielClient({
   auth: { cookieD, token?, workspace?, allowedTeams? },
   concurrency: { globalConcurrency: 32, perKeyConcurrency: 1, maxQueue: 5000, maxInflightEvents: 10_000,
                  executorKey: "channel", handlerTimeoutMs: 300_000 },
-  hydration: { hydrateBudgetMs: 300, preloadUsergroups: true },
+  hydration: { hydrateBudgetMs: 1_000, backfillBudgetMs: 5_000, preloadUsergroups: true },
   loopGuard: { includeSelfMessages: false, maxAutoRepliesPerMinute: 5 },
   chat: { globalSendConcurrency: 4, itemDeadlineMs: 30_000, streamUpdatesPerSecond: 2,
           streamMinIntervalMs: 500, interruptedNotice: "\n\n_(已中断)_" },
@@ -487,7 +487,7 @@ client.on("connection.gap", (e) => { if (!e.recovered) warn("消息补拉不完�
 | SDK 发的消息没有触发 `message.created` | 本实例回声默认过滤 | 预期行为；确需接收设 `loopGuard.includeSelfMessages: true` |
 | 我在浏览器里随手发的消息触发了 AI | 本人消息 `origin: "self_other_client"` 会派发 | 在处理器里判断 `origin` |
 | 收不到某同事的上下线 | 没有 `presence.watch()`，或句柄已释放 | 检查句柄生命周期 |
-| `markdown` 里还有 `<@U…>` | 实名解析超过 300ms 预算 | `await ctx.hydrateRemaining()` |
+| `markdown` 里还有 `<@U…>` | 实名解析超过 1s 预算 | `await ctx.hydrateRemaining()` |
 | 重启后收到一批 `delivery: "backfill"` | 持久化存储在补拉离线期间的消息 | 预期行为；不需要时按 `delivery` 过滤 |
 | AI 回复后我的未读红点没了 | 发消息会推进已读位置 | 开启 `preserveUnreadCursor: true` |
 | `channels.getHistory()` 拿不到线程回复 | 频道历史本身不含普通线程回复 | 用 `threads.getContext()` |

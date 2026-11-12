@@ -54,8 +54,13 @@ export interface ConcurrencyOptions {
 }
 
 export interface HydrationOptions {
-  /** Time budget for resolving names per event (default 300ms). */
+  /** Time budget for resolving names per event (default 1000ms). */
   hydrateBudgetMs?: number;
+  /**
+   * Time budget for resolving the names of all messages of one gap recovery, before any of them
+   * is dispatched (default 5000ms; 0 skips the shared lookup).
+   */
+  backfillBudgetMs?: number;
   /** Preload user groups so @group mentions resolve and `isMentioningMe` covers my groups (default true). */
   preloadUsergroups?: boolean;
 }
@@ -170,6 +175,7 @@ export class GabrielClient {
   private readonly allControllers = new Set<AbortController>();
   private readonly opts: Required<Pick<ConcurrencyOptions, "maxInflightEvents" | "handlerTimeoutMs" | "executorKey">> & {
     hydrateBudgetMs: number;
+    backfillBudgetMs: number;
     includeSelfMessages: boolean;
     maxPagesPerChannel: number;
     resyncBufferLimit: number;
@@ -220,7 +226,8 @@ export class GabrielClient {
       maxInflightEvents: c.maxInflightEvents ?? 10_000,
       handlerTimeoutMs: c.handlerTimeoutMs ?? 300_000,
       executorKey: c.executorKey ?? "channel",
-      hydrateBudgetMs: options.hydration?.hydrateBudgetMs ?? 300,
+      hydrateBudgetMs: options.hydration?.hydrateBudgetMs ?? 1_000,
+      backfillBudgetMs: options.hydration?.backfillBudgetMs ?? 5_000,
       includeSelfMessages: options.loopGuard?.includeSelfMessages ?? false,
       maxPagesPerChannel: options.recovery?.maxPagesPerChannel ?? 10,
       resyncBufferLimit: options.recovery?.resyncBufferLimit ?? 10_000,
@@ -622,6 +629,7 @@ export class GabrielClient {
       this.inflightEvents = Math.max(0, this.inflightEvents - 1);
       return;
     }
+    hydration.refresh(); // names that arrived while the event waited for its lane
     if (evt.type === "message.created") attachLLMContext(evt);
     this.metrics.observe("hydration_latency_ms", hydration.complete ? 0 : this.opts.hydrateBudgetMs, { type: evt.type });
     if ((evt.type === "message.created" || evt.type === "message.updated") && evt.origin === "this_client" && !this.opts.includeSelfMessages) {
@@ -660,7 +668,7 @@ export class GabrielClient {
     this.inflightEvents++;
     const lane = laneKey;
     const prev = this.lanes.get(lane) ?? Promise.resolve();
-    const next = prev.then(() => this.route(draft, { complete: true, remaining: async () => {} }));
+    const next = prev.then(() => this.route(draft, { complete: true, refresh() {}, remaining: async () => {} }));
     this.lanes.set(lane, next);
     void next.then(() => {
       if (this.lanes.get(lane) === next) this.lanes.delete(lane);
@@ -692,6 +700,7 @@ export class GabrielClient {
 
   private async runOne(handler: Handler<GabrielEvent>, draft: Draft, hydration: HydrationResult, job: JobHandle): Promise<void> {
     const evt = draft.event;
+    hydration.refresh(); // names that arrived while the event waited in the executor queue
     const controller = new AbortController();
     this.allControllers.add(controller);
     const trigger = triggerOf(evt);
@@ -835,7 +844,7 @@ export class GabrielClient {
 
   private detachedContext(evt: GabrielEvent): EventContext {
     const controller = new AbortController();
-    return this.makeContext(evt, controller, { complete: true, remaining: async () => {} }, () => false, { suspend() {}, resume: async () => {} });
+    return this.makeContext(evt, controller, { complete: true, refresh() {}, remaining: async () => {} }, () => false, { suspend() {}, resume: async () => {} });
   }
 
   private async waitForReply(
@@ -964,11 +973,17 @@ export class GabrielClient {
   private async runRecovery(cause: "fast_reconnect_reconcile" | "cold_resync" | "overflow", blocking: boolean): Promise<boolean> {
     try {
       const { frames, gap } = await recoverGap(this.core, this.channels, this.marks, { maxPagesPerChannel: this.opts.maxPagesPerChannel, logger: this.logger });
-      const firstBuffered = this.resyncBuffer?.find((d) => d.createdTs)?.createdTs;
-      const late: Draft[] = [];
+      const drafts: Draft[] = [];
       for (const frame of frames) {
         const draft = normalizeFrame(frame, this.normalizeContext("backfill"));
-        if (!draft) continue;
+        if (draft) drafts.push(draft);
+      }
+      // One shared lookup for the whole batch: every draft's per-event budget starts at the same
+      // instant, so a cold cache would otherwise time all of them out together.
+      await this.hydrator.preload(drafts, this.opts.backfillBudgetMs);
+      const firstBuffered = this.resyncBuffer?.find((d) => d.createdTs)?.createdTs;
+      const late: Draft[] = [];
+      for (const draft of drafts) {
         if (blocking && firstBuffered && draft.createdTs && compareTs(draft.createdTs, firstBuffered) >= 0) late.push(draft);
         else this.dispatch(draft, "backfill");
       }

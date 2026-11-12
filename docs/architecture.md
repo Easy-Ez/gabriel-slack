@@ -105,7 +105,7 @@ stateDiagram-v2
 ## 5. The event pipeline
 
 ```text
-frame ─► normalize ─► (de-dup) ─► hydrate (≤300 ms) ─► lane (per channel) ─► reply router ─► executor ─► handlers
+frame ─► normalize ─► (de-dup) ─► hydrate (≤1 s) ─► lane (per channel) ─► reply router ─► executor ─► handlers
                                                                                  │
                                                        ctx.waitForReply waiters ◄┘
 ```
@@ -119,8 +119,9 @@ frame ─► normalize ─► (de-dup) ─► hydrate (≤300 ms) ─► lane (p
    backfill can overlap safely.
 3. **Hydrate with a budget.** User, channel and group names are looked up through batching
    loaders (one request per short window, cached, misses cached too). Lookups start immediately and
-   in parallel, but each event waits at most 300 ms; unresolved mentions keep their raw form and
-   can be completed later with `ctx.hydrateRemaining()`.
+   in parallel, but each event waits at most 1 s; unresolved mentions keep their raw form and
+   can be completed later with `ctx.hydrateRemaining()`. Names that arrive while a timed-out event
+   is still queued are applied before its handlers run.
 4. **Lanes keep order.** Events are emitted per channel in arrival order even when a later event
    hydrates faster. Lane keys come only from raw fields, never from lookup results.
 5. **Reply router.** Messages are offered to `waitForReply` waiters before they reach the
@@ -185,7 +186,9 @@ so reconnects do not flood handlers with "user is online" events.
 * After a cold reconnect or a restart with a persistent store, the client buffers live frames,
   fetches what was missed (channel history from the watermark, and replies of threads it
   participates in — thread replies never appear in channel history), delivers that as
-  `delivery: "backfill"` in order, then releases the buffered live frames.
+  `delivery: "backfill"` in order, then releases the buffered live frames. The names of the whole
+  batch are looked up together first (up to 5 s), so backfilled events do not depend on the
+  per-event budget.
 * Every recovery ends with a `connection.gap` report; `recovered: false` lists exactly which ranges
   could not be fetched, so "no message lost" is a checked claim, not an assumption.
 

@@ -96,8 +96,11 @@ class ConcurrencyOptions:
 
 @dataclass(kw_only=True, slots=True)
 class HydrationOptions:
-    #: Time budget for resolving names per event, in seconds (default 0.3).
-    hydrate_budget: float = 0.3
+    #: Time budget for resolving names per event, in seconds (default 1.0).
+    hydrate_budget: float = 1.0
+    #: Time budget, in seconds, for resolving the names of all messages of one gap recovery before
+    #: any of them is dispatched (default 5.0; 0 skips the shared lookup).
+    backfill_budget: float = 5.0
     #: Preload user groups so @group mentions resolve and ``is_mentioning_me`` covers my groups.
     preload_usergroups: bool = True
 
@@ -421,6 +424,7 @@ class GabrielClient:
         self._handler_timeout = c.handler_timeout
         self._executor_key_mode = c.executor_key
         self._hydrate_budget = h.hydrate_budget
+        self._backfill_budget = h.backfill_budget
         self._include_self_messages = lg.include_self_messages
         self._max_pages_per_channel = r.max_pages_per_channel
         self._resync_buffer_limit = r.resync_buffer_limit
@@ -1040,6 +1044,7 @@ class GabrielClient:
                 self._marks.pin(draft.channel_id, draft.created_ts, self._thread_of_draft(draft))
             self._forget(draft)
             return
+        hydration.refresh()  # names that arrived while the event waited for its lane
         self._metrics.observe(
             "hydration_latency_ms", 0 if hydration.complete else self._hydrate_budget * 1000, {"type": evt.type}
         )
@@ -1111,6 +1116,7 @@ class GabrielClient:
 
     async def _run_one(self, handler: Handler, draft: Draft, hydration: HydrationResult, job: JobHandle) -> None:
         evt = draft.event
+        hydration.refresh()  # names that arrived while the event waited in the executor queue
         controller = AbortController()
         self._all_controllers.add(controller)
         trigger = trigger_of(evt)
@@ -1396,12 +1402,17 @@ class GabrielClient:
                 max_pages_per_channel=self._max_pages_per_channel,
                 logger=self._logger,
             )
-            first_buffered = next((d.created_ts for d in self._resync_buffer or [] if d.created_ts), None)
-            late: list[Draft] = []
+            drafts: list[Draft] = []
             for frame in result.frames:
                 draft = normalize_frame(frame, self._normalize_context("backfill"))
-                if draft is None:
-                    continue
+                if draft is not None:
+                    drafts.append(draft)
+            # One shared lookup for the whole batch: every draft's per-event budget starts at the
+            # same instant, so a cold cache would otherwise time all of them out together.
+            await self._hydrator.preload(drafts, self._backfill_budget)
+            first_buffered = next((d.created_ts for d in self._resync_buffer or [] if d.created_ts), None)
+            late: list[Draft] = []
+            for draft in drafts:
                 if (
                     blocking
                     and first_buffered

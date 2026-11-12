@@ -110,6 +110,26 @@ describe("GabrielClient events", () => {
     expect(order).toEqual(["1800000001.000001", "1800000001.000002", "1800000001.000003"]);
   });
 
+  it("renders names that arrive after the budget but before the handler runs", async () => {
+    const slack = new FakeSlack();
+    slack.users.set("U0SLOW00001", { id: "U0SLOW00001", name: "slow", profile: { display_name: "Slow" } });
+    const origFetch = slack.fetch;
+    (slack as { fetch: typeof slack.fetch }).fetch = async (input, init) => {
+      if (String(init?.body ?? "").includes("U0SLOW00001")) await tick(300); // budget is 200ms
+      return origFetch(input, init);
+    };
+    const { client } = await started(slack);
+    const names: Array<string | undefined> = [];
+    client.on("message.created", async (e) => {
+      if (names.length === 0) await tick(500); // keeps the second message queued behind this one
+      names.push(e.sender.displayName);
+    });
+    slack.socket.deliver(messageFrame({ ts: "1800000001.000001" }));
+    slack.socket.deliver(messageFrame({ user: "U0SLOW00001", ts: "1800000001.000002" }));
+    await until(() => names.length === 2);
+    expect(names[1]).toBe("Slow");
+  });
+
   it("de-duplicates redelivered frames by eventId", async () => {
     const { slack, client } = await started();
     let n = 0;
@@ -535,6 +555,39 @@ describe("gap recovery", () => {
     expect(slack.callsTo("conversations.history")[0]!.fields.oldest).toBe("1800000001.000100");
     await until(() => gaps.length === 1);
     expect(gaps[0]).toMatchObject({ cause: "cold_resync", recovered: true, recoveredCount: 2, channelsRecovered: ["C0GENERAL01"] });
+  });
+
+  it("resolves the names of a whole backfill before dispatching it, beyond the per-event budget", async () => {
+    const slack = new FakeSlack();
+    slack.users.set("U0SLOW00001", { id: "U0SLOW00001", name: "slow", profile: { display_name: "Slow" } });
+    slack.on("client.counts", () => ({ ok: true, channels: [{ id: "C0GENERAL01", latest: "1800000005.000100" }], mpims: [], ims: [] }));
+    slack.on("conversations.history", () => ({
+      ok: true,
+      has_more: false,
+      messages: [
+        { type: "message", user: "U0SLOW00001", text: "missed 2", ts: "1800000003.000100" },
+        { type: "message", user: "U0SLOW00001", text: "missed 1", ts: "1800000002.000100" },
+      ],
+    }));
+    const origFetch = slack.fetch;
+    (slack as { fetch: typeof slack.fetch }).fetch = async (input, init) => {
+      if (String(init?.body ?? "").includes("U0SLOW00001")) await tick(400); // per-event budget is 200ms
+      return origFetch(input, init);
+    };
+    const { client } = await started(slack);
+    const seen: Array<{ delivery: string; sender: string | undefined }> = [];
+    client.on("message.created", (e) => void seen.push({ delivery: e.delivery, sender: e.sender.displayName }));
+    slack.socket.deliver(messageFrame({ ts: "1800000001.000100" }));
+    await until(() => seen.length === 1);
+    await tick(20);
+
+    client.core.ws.markReady(false);
+    slack.socket.serverClose(1006); // no frt ticket → cold reconnect
+    await until(() => seen.length === 3, 5_000);
+    expect(seen.slice(1)).toEqual([
+      { delivery: "backfill", sender: "Slow" },
+      { delivery: "backfill", sender: "Slow" },
+    ]);
   });
 });
 

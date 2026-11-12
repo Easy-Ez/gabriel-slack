@@ -145,16 +145,26 @@ def channel_ref(rec: ChannelRef | None, id: str) -> ChannelRef:
 
 @dataclass(slots=True)
 class HydrationResult:
+    #: False when the budget ran out before every lookup finished.
     complete: bool
     _all: asyncio.Future[Any] | None = field(default=None, repr=False)
     _draft: Draft | None = field(default=None, repr=False)
     _hydrator: Hydrator | None = field(default=None, repr=False)
+    _up_to_date: bool = field(default=False, repr=False)
+
+    def refresh(self) -> None:
+        """Re-renders the draft with the names known now (no-op once complete)."""
+        if self.complete or self._up_to_date or self._draft is None or self._hydrator is None:
+            return
+        self._up_to_date = self._all is None or self._all.done()
+        self._hydrator.render(self._draft)
 
     async def remaining(self) -> None:
         """Completes all lookups and re-renders the draft."""
         if self._all is not None:
             await asyncio.shield(self._all)
         if self._draft is not None and self._hydrator is not None:
+            self._up_to_date = True
             self._draft.render(self._hydrator.resolver)
 
 
@@ -329,8 +339,8 @@ class Hydrator:
         self._thread_roots.set(ts, root or "")
         return root
 
-    async def hydrate(self, draft: Draft, budget: float) -> HydrationResult:
-        """Starts entity lookups for a draft and renders it within ``budget`` seconds."""
+    def _entity_lookups(self, draft: Draft) -> list[Awaitable[Any]]:
+        """Lookups for the users and channels a draft names that are not cached yet."""
         tasks: list[Awaitable[Any]] = []
         for id in draft.needs.users:
             if not self.users.is_known(id):
@@ -338,15 +348,34 @@ class Hydrator:
         for id in draft.needs.channels:
             if not self.is_channel_known(id):
                 tasks.append(self._load_channel_and_peer(id))
+        return tasks
+
+    def render(self, draft: Draft) -> None:
+        try:
+            draft.render(self.resolver)
+        except Exception as err:
+            self._logger.error({"err": str(err)}, "render failed")
+
+    async def preload(self, drafts: list[Draft], budget: float) -> None:
+        """Resolves the names a batch of drafts needs, in shared batched requests, waiting at most
+        ``budget`` seconds. Gap recovery calls it before dispatching so backfilled events find a
+        warm cache."""
+        if budget <= 0:
+            return
+        tasks = [t for d in drafts for t in self._entity_lookups(d)]
+        if not tasks:
+            return
+        await asyncio.wait({asyncio.ensure_future(self._settle_all(tasks))}, timeout=budget)
+
+    async def hydrate(self, draft: Draft, budget: float) -> HydrationResult:
+        """Starts entity lookups for a draft and renders it within ``budget`` seconds."""
+        tasks = self._entity_lookups(draft)
         target = draft.reaction_target
         if target is not None:
             tasks.append(self._resolve_reaction_root(draft, target.channel, target.ts))
 
         def finish(complete: bool, all_fut: asyncio.Future[Any] | None) -> HydrationResult:
-            try:
-                draft.render(self.resolver)
-            except Exception as err:
-                self._logger.error({"err": str(err)}, "render failed")
+            self.render(draft)
             return HydrationResult(complete, all_fut, draft, self)
 
         if not tasks:
