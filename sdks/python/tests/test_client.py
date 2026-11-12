@@ -175,6 +175,32 @@ async def test_per_channel_order_even_when_hydration_finishes_out_of_order(start
     assert order == ["1800000001.000001", "1800000001.000002", "1800000001.000003"]
 
 
+async def test_renders_names_that_arrive_after_the_budget_but_before_the_handler(started: Started) -> None:
+    slack = FakeSlack()
+    slack.users["U0SLOW00001"] = {"id": "U0SLOW00001", "name": "slow", "profile": {"display_name": "Slow"}}
+    original = slack.handle
+
+    async def slow_handle(request: httpx.Request) -> httpx.Response:
+        if b"U0SLOW00001" in (request.content or b""):
+            await tick(0.3)  # budget is 0.2 s
+        return await original(request)
+
+    slack.handle = slow_handle  # type: ignore[method-assign]
+    _, client = await started(slack)
+    names: list[str | None] = []
+
+    async def handler(e: Any, _ctx: Any) -> None:
+        if not names:
+            await tick(0.5)  # keeps the second message queued behind this one
+        names.append(e.sender.display_name)
+
+    client.on("message.created", handler)
+    slack.socket.deliver(message_frame(ts="1800000001.000001"))
+    slack.socket.deliver(message_frame(user="U0SLOW00001", ts="1800000001.000002"))
+    await until(lambda: len(names) == 2)
+    assert names[1] == "Slow"
+
+
 async def test_dedupes_redelivered_frames_by_event_id(started: Started) -> None:
     slack, client = await started()
     n = 0
@@ -782,6 +808,50 @@ async def test_backfills_history_after_cold_reconnect_before_buffered_realtime(s
     assert gap["recovered"] is True
     assert gap["recoveredCount"] == 2
     assert gap["channelsRecovered"] == ["C0GENERAL01"]
+
+
+async def test_resolves_names_of_a_whole_backfill_before_dispatching_it(started: Started) -> None:
+    slack = FakeSlack()
+    slack.users["U0SLOW00001"] = {"id": "U0SLOW00001", "name": "slow", "profile": {"display_name": "Slow"}}
+    slack.on(
+        "client.counts",
+        lambda _f, _n: {
+            "ok": True,
+            "channels": [{"id": "C0GENERAL01", "latest": "1800000005.000100"}],
+            "mpims": [],
+            "ims": [],
+        },
+    )
+    slack.on(
+        "conversations.history",
+        lambda _f, _n: {
+            "ok": True,
+            "has_more": False,
+            "messages": [
+                {"type": "message", "user": "U0SLOW00001", "text": "missed 2", "ts": "1800000003.000100"},
+                {"type": "message", "user": "U0SLOW00001", "text": "missed 1", "ts": "1800000002.000100"},
+            ],
+        },
+    )
+    original = slack.handle
+
+    async def slow_handle(request: httpx.Request) -> httpx.Response:
+        if b"U0SLOW00001" in (request.content or b""):
+            await tick(0.4)  # per-event budget is 0.2 s
+        return await original(request)
+
+    slack.handle = slow_handle  # type: ignore[method-assign]
+    _, client = await started(slack)
+    seen: list[tuple[str, str | None]] = []
+    client.on("message.created", lambda e, _ctx: seen.append((e.delivery, e.sender.display_name)))
+    slack.socket.deliver(message_frame(ts="1800000001.000100"))
+    await until(lambda: len(seen) == 1)
+    await tick(0.02)
+
+    client.core.ws.mark_ready(False)
+    slack.socket.server_close(1006)  # no frt ticket → cold reconnect
+    await until(lambda: len(seen) == 3, timeout=5.0)
+    assert seen[1:] == [("backfill", "Slow"), ("backfill", "Slow")]
 
 
 # -------------------------------------------------------------------------------------- lifecycle

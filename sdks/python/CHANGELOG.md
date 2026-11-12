@@ -6,6 +6,20 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- `HydrationOptions.backfill_budget` (default 5.0 s): how long a gap recovery waits for the names
+  of all its messages before dispatching them. `0` skips the shared lookup.
+
+### Changed
+- `HydrationOptions.hydrate_budget` defaults to 1.0 s (was 0.3). One name lookup round trip
+  commonly takes 250–450 ms, so the old budget ran out on most cache misses.
+
+### Fixed
+- Backfilled events no longer arrive without sender, channel and mention names after a restart:
+  gap recovery resolves the names of the whole batch before dispatching it.
+- An event whose name lookup outlasted its budget is rendered again with the names known by then
+  when it leaves its lane and when each handler starts, instead of keeping raw IDs.
+
 ## [0.4.1] - 2026-11-10
 
 ### Fixed

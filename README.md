@@ -106,7 +106,7 @@ Full API documentation:
 * **One primary event per frame**: `message.created` covers channel messages, thread replies,
   broadcasts and bot posts, so one message never fires overlapping handlers.
 * **Ordered and hydrated**: per-channel arrival order is preserved while names, mentions and
-  Markdown are resolved in parallel within a 300 ms budget.
+  Markdown are resolved in parallel within a 1 s budget.
 * **Loop-safe**: every event carries an `origin` (`this_client`, `self_other_client`,
   `other_user`, `bot`); echoes of this client's writes are dropped by default.
 * **AI-ready**: `toLLMContext()` / `to_llm_context()` wraps message content in an untrusted-content envelope;

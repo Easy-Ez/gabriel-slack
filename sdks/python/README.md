@@ -186,7 +186,7 @@ async def handle(evt, ctx):
     stream = await ctx.reply_stream()     # streaming reply in the trigger's thread
     await ctx.react("eyes")
     answer = await ctx.wait_for_reply(lambda r: r.thread_ts == evt.ts, timeout=60)  # None on timeout
-    await ctx.hydrate_remaining()         # finish name resolution if the 300 ms budget ran out
+    await ctx.hydrate_remaining()         # finish name resolution if the 1 s budget ran out
 ```
 
 `await ctx.signal.wait()` blocks until the signal fires; `ctx.signal.aborted` checks it.
@@ -347,7 +347,7 @@ GabrielClient(
     auth=AuthOptions(cookie_d=..., token=None, workspace=None, allowed_teams=None),
     concurrency=ConcurrencyOptions(global_concurrency=32, per_key_concurrency=1, max_queue=5000,
                                    max_inflight_events=10_000, executor_key="channel", handler_timeout=300.0),
-    hydration=HydrationOptions(hydrate_budget=0.3, preload_usergroups=True),
+    hydration=HydrationOptions(hydrate_budget=1.0, backfill_budget=5.0, preload_usergroups=True),
     loop_guard=LoopGuardOptions(include_self_messages=False, max_auto_replies_per_minute=5),
     chat=ChatSchedulerOptions(global_send_concurrency=4, item_deadline=30.0, stream_updates_per_second=2,
                               stream_min_interval=0.5, interrupted_notice="\n\n_(interrupted)_"),
