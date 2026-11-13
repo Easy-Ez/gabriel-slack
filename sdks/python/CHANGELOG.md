@@ -6,6 +6,8 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-13
+
 ### Changed
 - **Behavior change: `markdown` no longer contains link previews.** Slack's unfurls (attachments
   with `original_url`, `from_url`, `is_app_unfurl` or `is_msg_unfurl`, e.g. a GitHub pull request
