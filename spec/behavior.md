@@ -93,7 +93,7 @@ any → BACKOFF → DISCONNECTED            any → CREDENTIAL_REFRESH → DISCO
 | :--- | :--- |
 | `message` with no subtype, `file_share`, `thread_broadcast`, `bot_message`, `me_message` | `message.created` |
 | `message_changed` with `streaming_state` (or `ai_context.result_status`) | `ai.stream_updated` / `ai.stream_completed` |
-| `message_changed` otherwise, if the body hash (text + blocks + file IDs + attachments) changed | `message.updated` (metadata-only changes produce nothing) |
+| `message_changed` otherwise, if the body hash (text + blocks + file IDs + attachments) changed | `message.updated` (metadata-only changes produce nothing; a change that only adds or updates link previews still produces one, §6.5) |
 | `message_deleted` (target ts = `deleted_ts`) | `message.deleted` |
 | `message_replied` | `message.thread_meta_updated` |
 | any other `message` subtype | `message.other` |
@@ -146,7 +146,7 @@ and stay available as raw frames.
 `markdown` is produced from `blocks` when present (rich text sections, lists, quotes,
 preformatted with language, headers, sections, context, tables), else from mrkdwn entities
 (`<@U…>`, `<#C…|name>`, `<!here>`, `<!subteam^S…>`, `<url|label>`), plus legacy
-attachments.
+attachments that are not link previews. Link previews are never part of `markdown` (§6.5).
 
 `message.created.mentionReasons` lists why the message mentions the user, each reason at most
 once and in this order:
@@ -178,6 +178,35 @@ block rendered to Markdown; `review` is the block ID suffix when it is `confirme
 `at_everyone`, `keyword`, `unjoined_channel_mention`, `list_record_assigned`,
 `list_user_mentioned`, `list_todo_notification`, `list_approval_request`,
 `list_approval_reviewed`. Unknown activity keys are passed through.
+
+### 6.5 Link previews
+
+Slack puts what the sender wrote in `text` / `blocks` and the previews it generates for links
+(unfurls) in `attachments`, often seconds later through a `message_changed`. Previews are given
+apart from the body so that consumers can tell them from the sender's own words.
+
+An attachment is a **link preview** when it has `original_url`, `from_url`, `is_app_unfurl` or
+`is_msg_unfurl` (a shared Slack message). Other attachments (for example legacy attachments posted
+by bots, which carry none of these) keep being rendered into `markdown` as before.
+
+Each preview becomes `{ url, serviceName?, title?, text? }`, in attachment order:
+
+| Field | Source |
+| :--- | :--- |
+| `url` | `original_url`, else `from_url`, else `app_unfurl_url`, else `title_link`; empty string when none is present |
+| `serviceName` | `"Slack"` for a shared Slack message (`is_msg_unfurl`), else `service_name`; absent when missing (app unfurls such as GitHub's usually have none) |
+| `title` | `title`, rendered like `markdown` (§6.4); absent when empty |
+| `text` | the attachment `blocks` rendered like `markdown`, else `text` rendered the same way; absent when empty |
+
+* `message.created.linkPreviews` and `message.updated.currentLinkPreviews` are always present
+  (empty arrays when there is none); `markdown` / `currentMarkdown` / `previousMarkdown` never
+  contain them.
+* A `message_changed` whose only change is a new or updated preview still produces
+  `message.updated`, with `currentMarkdown` equal to the previous body and the preview in
+  `currentLinkPreviews`.
+* History, thread, activity and search messages carry `linkPreviews` by the same rules (§10.1).
+* `toLLMContext()` lists previews in their own section inside the untrusted envelope, marked as
+  generated automatically and not written by the sender (§11).
 
 ## 7. Subscriptions
 
@@ -325,7 +354,7 @@ anything read, opens or closes a conversation, or writes in any other way.
   full messages this way; an entry whose message no longer exists is kept without a message.
 
 History, thread, activity and search messages carry `mentions` and `mentionReasons` computed by
-the rules of §6.4. History messages also carry the raw `subtype` and a deletion flag.
+the rules of §6.4, and `linkPreviews` by the rules of §6.5 (their `markdown` excludes previews). History messages also carry the raw `subtype` and a deletion flag.
 
 ## 11. Sandbox
 
@@ -339,7 +368,9 @@ for every write. Violations fail with `SCOPE_POLICY_VIOLATION` and are logged. S
 never expose the low-level core.
 
 `toLLMContext()` separates metadata from body and marks the body as untrusted; sequences that
-could close the envelope are neutralized.
+could close the envelope are neutralized. Link previews (§6.5) follow the body in their own
+`<link_previews>` section, still inside the envelope, labelled as generated automatically and not
+written by the sender.
 
 ## 12. Errors
 

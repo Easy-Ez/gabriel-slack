@@ -1,0 +1,79 @@
+{
+  "description": "A shared Slack message (is_msg_unfurl) becomes a link preview with serviceName Slack; its blocks render like the body",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0BOB000001": "Bob",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general",
+        "D0ALICEDM01": "@Alice"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "<https://your-workspace.slack.com/archives/C0GENERAL01/p1800000001000100>",
+    "ts": "1800000006.000100",
+    "attachments": [
+      {
+        "id": 1,
+        "is_msg_unfurl": true,
+        "is_share": true,
+        "from_url": "https://your-workspace.slack.com/archives/C0GENERAL01/p1800000001000100",
+        "channel_id": "C0GENERAL01",
+        "ts": "1800000001.000100",
+        "author_id": "U0BOB000001",
+        "author_name": "Bob",
+        "text": "deploy finished, thanks <@U0SELF00001>",
+        "fallback": "[shared message]",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "b0001",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "text",
+                    "text": "deploy finished, thanks "
+                  },
+                  {
+                    "type": "user",
+                    "user_id": "U0SELF00001"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "mrkdwn_in": [
+          "text"
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "type": "message.created",
+    "markdown": "https://your-workspace.slack.com/archives/C0GENERAL01/p1800000001000100",
+    "linkPreviews": [
+      {
+        "url": "https://your-workspace.slack.com/archives/C0GENERAL01/p1800000001000100",
+        "serviceName": "Slack",
+        "text": "deploy finished, thanks @Me"
+      }
+    ]
+  }
+}

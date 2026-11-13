@@ -1,0 +1,55 @@
+{
+  "description": "A website unfurl (original_url / from_url / service_name) becomes a link preview and is left out of markdown",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0BOB000001": "Bob",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general",
+        "D0ALICEDM01": "@Alice"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "channel": "C0GENERAL01",
+    "user": "U0ALICE0001",
+    "text": "see <https://docs.example.com/guide/getting-started> for setup",
+    "ts": "1800000004.000100",
+    "attachments": [
+      {
+        "id": 1,
+        "original_url": "https://docs.example.com/guide/getting-started",
+        "from_url": "https://docs.example.com/guide/getting-started",
+        "service_name": "Example Docs",
+        "title": "Getting started",
+        "title_link": "https://docs.example.com/guide/getting-started",
+        "text": "Install the CLI and sign in.",
+        "fallback": "Example Docs: Getting started",
+        "service_icon": "https://docs.example.com/favicon.ico"
+      }
+    ]
+  },
+  "expected": {
+    "type": "message.created",
+    "markdown": "see https://docs.example.com/guide/getting-started for setup",
+    "linkPreviews": [
+      {
+        "url": "https://docs.example.com/guide/getting-started",
+        "serviceName": "Example Docs",
+        "title": "Getting started",
+        "text": "Install the CLI and sign in."
+      }
+    ]
+  }
+}

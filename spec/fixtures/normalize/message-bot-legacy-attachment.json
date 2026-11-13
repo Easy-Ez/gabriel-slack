@@ -1,0 +1,48 @@
+{
+  "description": "A legacy bot attachment without unfurl markers is not a link preview and keeps being rendered into markdown",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0BOB000001": "Bob",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general",
+        "D0ALICEDM01": "@Alice"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "subtype": "bot_message",
+    "channel": "C0GENERAL01",
+    "bot_id": "B0BOT000001",
+    "username": "CI Bot",
+    "text": "build finished",
+    "ts": "1800000007.000100",
+    "attachments": [
+      {
+        "id": 1,
+        "color": "2eb886",
+        "title": "Build #128 passed",
+        "title_link": "https://ci.example.com/builds/128",
+        "text": "All 312 tests passed",
+        "fallback": "Build #128 passed"
+      }
+    ]
+  },
+  "expected": {
+    "type": "message.created",
+    "origin": "bot",
+    "markdown": "build finished\n\nBuild #128 passed\nAll 312 tests passed",
+    "linkPreviews": []
+  }
+}
