@@ -1,0 +1,79 @@
+{
+  "description": "A message_changed that only adds a GitHub app unfurl still yields message.updated; the preview is in currentLinkPreviews, not currentMarkdown",
+  "context": {
+    "selfUserId": "U0SELF00001",
+    "mySubteams": [
+      "S0ONCALL001"
+    ],
+    "entities": {
+      "users": {
+        "U0ALICE0001": "Alice",
+        "U0BOB000001": "Bob",
+        "U0SELF00001": "Me"
+      },
+      "channels": {
+        "C0GENERAL01": "general",
+        "D0ALICEDM01": "@Alice"
+      },
+      "usergroups": {
+        "S0ONCALL001": "oncall"
+      }
+    }
+  },
+  "frame": {
+    "type": "message",
+    "subtype": "message_changed",
+    "channel": "D0ALICEDM01",
+    "hidden": true,
+    "ts": "1800000003.000200",
+    "event_ts": "1800000003.000200",
+    "message": {
+      "type": "message",
+      "user": "U0ALICE0001",
+      "client_msg_id": "00000000-0000-4000-8000-000000000042",
+      "text": "<https://github.com/example-org/example-repo/pull/42>",
+      "ts": "1800000001.000100",
+      "attachments": [
+        {
+          "id": 1,
+          "app_id": "A0GITHUB001",
+          "bot_id": "B0GITHUB001",
+          "is_app_unfurl": true,
+          "app_unfurl_url": "https://github.com/example-org/example-repo/pull/42",
+          "title_link": "https://github.com/example-org/example-repo/pull/42",
+          "title": "#42 Add retries to the uploader",
+          "text": "Retries failed uploads up to three times.\n\n- adds a backoff\n- adds tests",
+          "footer": "<https://github.com/example-org/example-repo|example-org/example-repo>",
+          "ts": 1800000000,
+          "color": "36a64f",
+          "mrkdwn_in": [
+            "text"
+          ],
+          "fallback": "[example-org/example-repo] Pull request #42: Add retries to the uploader"
+        }
+      ]
+    },
+    "previous_message": {
+      "type": "message",
+      "user": "U0ALICE0001",
+      "client_msg_id": "00000000-0000-4000-8000-000000000042",
+      "text": "<https://github.com/example-org/example-repo/pull/42>",
+      "ts": "1800000001.000100"
+    }
+  },
+  "expected": {
+    "type": "message.updated",
+    "eventId": "D0ALICEDM01:1800000001.000100:updated:1800000003.000200",
+    "ts": "1800000001.000100",
+    "currentMarkdown": "https://github.com/example-org/example-repo/pull/42",
+    "previousMarkdown": "https://github.com/example-org/example-repo/pull/42",
+    "currentLinkPreviews": [
+      {
+        "url": "https://github.com/example-org/example-repo/pull/42",
+        "title": "#42 Add retries to the uploader",
+        "text": "Retries failed uploads up to three times.\n\n- adds a backoff\n- adds tests"
+      }
+    ],
+    "origin": "other_user"
+  }
+}

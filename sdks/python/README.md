@@ -162,9 +162,12 @@ fields; `evt.to_dict()` / `evt.to_json()` produce the schema form. Select events
 
 Key fields of `MessageCreatedEvent`: `ts`, `channel` (`id`, `name`, `is_private`, `is_im`,
 `is_mpim`), `sender` (`id`, `display_name`, `handle`, `is_bot`, `is_external`), `origin`, `text`
-(raw mrkdwn), `markdown` (standard Markdown, mentions rendered as `@Name`), `thread`
-(`root_ts`, `is_reply`, `broadcast` or `None`), `is_thread_reply`, `thread_ts`, `mentions`,
-`mention_reasons`, `is_mentioning_me`, `files`, `delivery` (`realtime` | `backfill`), `raw`.
+(raw mrkdwn), `markdown` (standard Markdown of what the sender wrote, mentions rendered as
+`@Name`), `link_previews` (`LinkPreview(url, service_name, title, text)`: link unfurls, never part
+of `markdown`), `thread` (`root_ts`, `is_reply`, `broadcast` or `None`), `is_thread_reply`,
+`thread_ts`, `mentions`, `mention_reasons`, `is_mentioning_me`, `files`, `delivery` (`realtime` |
+`backfill`), `raw`. `MessageUpdatedEvent` carries `current_link_previews`; Slack often adds a
+preview a few seconds after the message, as an update whose `current_markdown` did not change.
 
 **Mentions.** `mention_reasons` says why a message mentions you: `"direct"` (you, by ID),
 `"usergroup"` (a user group you belong to) and / or `"broadcast"` (`@here` / `@channel` /

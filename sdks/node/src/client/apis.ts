@@ -2,9 +2,9 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import type { GabrielCore } from "../core/core.js";
 import { GabrielError } from "../errors.js";
-import { attributionUserIds, extractMentions, mentionReasonsOf, renderMessageMarkdown, toFileRefs } from "../events/normalize.js";
+import { attachmentEntityIds, attributionUserIds, extractLinkPreviews, extractMentions, mentionReasonsOf, renderMessageMarkdown, toFileRefs } from "../events/normalize.js";
 import { parseAttribution, splitAttribution, type MessageAttribution } from "../markdown/attribution.js";
-import type { ChannelRef, DndInfo, FileRef, Mention, MentionReason, UserRef } from "../events/types.js";
+import type { ChannelRef, DndInfo, FileRef, LinkPreview, Mention, MentionReason, UserRef } from "../events/types.js";
 import { toChannelRecord, toUserRecord, type Hydrator, type UserRecord } from "./hydrator.js";
 import { assertChannelId, assertFileId, assertNonEmptyString, assertTs, assertUserId, compareTs, isTs, normalizeEmoji } from "../util/validate.js";
 
@@ -50,12 +50,15 @@ async function senderOf(h: Hydrator, msg: Obj): Promise<UserRef> {
 async function renderMessages(
   h: Hydrator,
   messages: Obj[],
-): Promise<Array<{ msg: Obj; sender: UserRef; markdown: string; files: FileRef[]; mentions: Mention[]; mentionReasons: MentionReason[]; attribution?: MessageAttribution }>> {
+): Promise<
+  Array<{ msg: Obj; sender: UserRef; markdown: string; linkPreviews: LinkPreview[]; files: FileRef[]; mentions: Mention[]; mentionReasons: MentionReason[]; attribution?: MessageAttribution }>
+> {
   const ids = new Set<string>();
   for (const m of messages) {
     if (s(m.user)) ids.add(s(m.user)!);
     for (const mm of (s(m.text) ?? "").matchAll(/<@([UW][A-Z0-9]+)/g)) ids.add(mm[1]!);
     for (const id of attributionUserIds(m)) ids.add(id);
+    for (const id of attachmentEntityIds(m).users) ids.add(id);
   }
   await Promise.allSettled([...ids].map((id) => h.users.load(id)));
   return Promise.all(
@@ -70,6 +73,7 @@ async function renderMessages(
         msg,
         sender: await senderOf(h, msg),
         markdown: renderMessageMarkdown(msg, h.resolver),
+        linkPreviews: extractLinkPreviews(msg, h.resolver),
         files: toFileRefs(msg.files),
         mentions,
         mentionReasons: mentionReasonsOf(mentions, { selfUserId: h.selfUserId, isMySubteam: (id) => h.subteamMembership(id) }),
@@ -85,7 +89,10 @@ async function renderMessages(
 export interface ThreadMessage {
   ts: string;
   sender: UserRef;
+  /** What the sender wrote, as standard Markdown; link previews are in `linkPreviews`. */
   markdown: string;
+  /** Link previews (unfurls) attached to the message (spec §6.5); empty when none. */
+  linkPreviews: LinkPreview[];
   /** Self-declared agent attribution line, removed from `markdown` (spec §9.1). Unverified. */
   attribution?: MessageAttribution;
   files: FileRef[];
@@ -118,10 +125,12 @@ export function formatTranscript(channel: ChannelRef, rootTs: string, messages: 
     const handle = m.sender.handle ? ` (@${m.sender.handle})` : "";
     const body = m.isDeleted ? "_(message deleted)_" : m.markdown || (m.files.length ? "" : "_(empty)_");
     const files = m.files.length ? `\n  [files: ${m.files.map((f) => f.name).join(", ")}]` : "";
+    const previews = m.isDeleted ? [] : m.linkPreviews.map((p) => `  [link preview, auto-generated: ${[p.serviceName, p.title?.replace(/\s+/g, " ")].filter(Boolean).join(" — ") || "untitled"}${p.url ? ` <${p.url}>` : ""}]`);
     const via = m.attribution ? ` [attribution: ${m.attribution.text.replace(/\s+/g, " ")}]` : "";
     lines.push(`[${formatTime(m.ts)}] ${who}${handle}${via}:`);
     lines.push(...body.split("\n").map((l) => `  ${l}`));
     if (files) lines.push(files);
+    lines.push(...previews);
     lines.push("");
   }
   return lines.join("\n").trimEnd();
@@ -168,10 +177,11 @@ export class ThreadsApi {
     const rootTs = (first && (s(first.thread_ts) ?? s(first.ts))) ?? ts;
     for (const m of raw) if (s(m.ts)) this.h.recordThreadRoot(s(m.ts)!, s(m.thread_ts) ?? null);
     const rendered = await renderMessages(this.h, raw);
-    const messages: ThreadMessage[] = rendered.map(({ msg, sender, markdown, files, mentions, mentionReasons, attribution }) => ({
+    const messages: ThreadMessage[] = rendered.map(({ msg, sender, markdown, linkPreviews, files, mentions, mentionReasons, attribution }) => ({
       ts: s(msg.ts) ?? "",
       sender,
       markdown,
+      linkPreviews,
       ...(attribution ? { attribution } : {}),
       files,
       mentions,
@@ -199,6 +209,7 @@ export class ThreadsApi {
           ts: s(r.msg.ts) ?? "",
           sender: r.sender,
           markdown: r.markdown,
+          linkPreviews: r.linkPreviews,
           ...(r.attribution ? { attribution: r.attribution } : {}),
           files: r.files,
           mentions: r.mentions,
@@ -472,7 +483,10 @@ export interface SearchMessageHit {
   ts: string;
   channel: ChannelRef;
   sender: UserRef;
+  /** What the sender wrote, as standard Markdown; link previews are in `linkPreviews`. */
   markdown: string;
+  /** Link previews (unfurls) attached to the message (spec §6.5); empty when none. */
+  linkPreviews: LinkPreview[];
   /** Self-declared agent attribution line, removed from `markdown` (spec §9.1). Unverified. */
   attribution?: MessageAttribution;
   files: FileRef[];
@@ -546,6 +560,7 @@ export class SearchApi {
         },
         sender: r2.sender,
         markdown: stripHighlight(r2.markdown),
+        linkPreviews: r2.linkPreviews,
         ...(r2.attribution ? { attribution: r2.attribution } : {}),
         files: r2.files,
         mentions: r2.mentions,
@@ -683,7 +698,10 @@ export class UsersApi {
 export interface HistoryMessage {
   ts: string;
   sender: UserRef;
+  /** What the sender wrote, as standard Markdown; link previews are in `linkPreviews`. */
   markdown: string;
+  /** Link previews (unfurls) attached to the message (spec §6.5); empty when none. */
+  linkPreviews: LinkPreview[];
   /** Self-declared agent attribution line, removed from `markdown` (spec §9.1). Unverified. */
   attribution?: MessageAttribution;
   files: FileRef[];
@@ -874,7 +892,7 @@ export class ChannelsApi {
   }
 }
 
-function toHistoryMessage({ msg, sender, markdown, files, mentions, mentionReasons, attribution }: Rendered): HistoryMessage {
+function toHistoryMessage({ msg, sender, markdown, linkPreviews, files, mentions, mentionReasons, attribution }: Rendered): HistoryMessage {
   const replyCount = typeof msg.reply_count === "number" ? msg.reply_count : 0;
   const threadTs = s(msg.thread_ts);
   const latest = s(msg.latest_reply);
@@ -883,6 +901,7 @@ function toHistoryMessage({ msg, sender, markdown, files, mentions, mentionReaso
     ts: s(msg.ts) ?? "",
     sender,
     markdown,
+    linkPreviews,
     ...(attribution ? { attribution } : {}),
     files,
     mentions,

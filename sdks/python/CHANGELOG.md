@@ -6,6 +6,29 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Behavior change: `markdown` no longer contains link previews.** Slack's unfurls (attachments
+  with `original_url`, `from_url`, `is_app_unfurl` or `is_msg_unfurl`, e.g. a GitHub pull request
+  or a shared Slack message) used to be appended to `MessageCreatedEvent.markdown`,
+  `MessageUpdatedEvent.current_markdown` / `previous_markdown`, `AiStream*Event.markdown` and the
+  `markdown` of thread, history, activity and search messages, so a message that was only a link
+  could turn into thousands of characters the sender never wrote. They are now left out and given
+  separately (see below). Legacy attachments without these markers (e.g. posted by bots) are still
+  rendered into `markdown`. Code that searched `markdown` for preview text should read the new
+  fields instead.
+- `to_llm_context()` lists link previews after the body in a `<link_previews>` section, inside the
+  untrusted envelope and labelled as generated automatically, not written by the sender. Thread
+  transcripts (`formatted_transcript`) show one `[link preview, auto-generated: …]` line per
+  preview.
+
+### Added
+- `LinkPreview` (`url`, `service_name`, `title`, `text`; serialized as `serviceName`) and
+  `MessageCreatedEvent.link_previews`, `MessageUpdatedEvent.current_link_previews`, and
+  `link_previews` on `ThreadMessage`, `HistoryMessage` (also activity entries' messages) and
+  `SearchMessageHit`; empty lists when there is none. A `message_changed` that only adds a preview
+  still emits `message.updated`, with the preview in `current_link_previews`. Names mentioned inside
+  attachments are now looked up for rendering.
+
 ## [0.6.0] - 2026-11-12
 
 ### Added

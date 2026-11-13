@@ -13,12 +13,23 @@ from ..core.types import RequestOpts
 from ..errors import GabrielError
 from ..events.normalize import (
     NormalizeContext,
+    attachment_entity_ids,
+    extract_link_previews,
     extract_mentions,
     mention_reasons_of,
     render_message_markdown,
     to_file_refs,
 )
-from ..events.types import ChannelRef, DndInfo, FileRef, Mention, MentionReason, MessageAttribution, UserRef
+from ..events.types import (
+    ChannelRef,
+    DndInfo,
+    FileRef,
+    LinkPreview,
+    Mention,
+    MentionReason,
+    MessageAttribution,
+    UserRef,
+)
 from ..markdown.attribution import attribution_user_ids, parse_attribution, split_attribution
 from ..markdown.chunker import _JS_WS
 from ..util.validate import (
@@ -82,6 +93,7 @@ class _Rendered:
     attribution: MessageAttribution | None = None
     mentions: list[Mention] = field(default_factory=list)
     mention_reasons: list[MentionReason] = field(default_factory=list)
+    link_previews: list[LinkPreview] = field(default_factory=list)
 
 
 async def _render_messages(h: Hydrator, messages: list[Obj]) -> list[_Rendered]:
@@ -93,6 +105,8 @@ async def _render_messages(h: Hydrator, messages: list[Obj]) -> list[_Rendered]:
         for mm in _USER_MENTION.finditer(_s(m.get("text")) or ""):
             ids[mm.group(1)] = None
         for uid in attribution_user_ids(m):
+            ids[uid] = None
+        for uid in attachment_entity_ids(m)[0]:
             ids[uid] = None
     await asyncio.gather(*(h.users.load(id) for id in ids), return_exceptions=True)
 
@@ -119,6 +133,7 @@ async def _render_messages(h: Hydrator, messages: list[Obj]) -> list[_Rendered]:
             parse_attribution(msg.get("blocks"), h.resolver),
             mentions,
             mention_reasons_of(mentions, ctx),
+            extract_link_previews(msg, h.resolver),
         )
 
     return list(await asyncio.gather(*(one(m) for m in messages)))
@@ -132,9 +147,12 @@ async def _render_messages(h: Hydrator, messages: list[Obj]) -> list[_Rendered]:
 class ThreadMessage:
     ts: str
     sender: UserRef
+    #: What the sender wrote, as standard Markdown; link previews are in ``link_previews``.
     markdown: str
     files: list[FileRef]
     is_deleted: bool
+    #: Link previews (unfurls) attached to the message (spec §6.5); empty when none.
+    link_previews: list[LinkPreview] = field(default_factory=list)
     #: Self-declared agent attribution line, removed from ``markdown`` (spec §9.1). Unverified.
     attribution: MessageAttribution | None = None
     #: Users, user groups and broadcasts mentioned in the body.
@@ -158,6 +176,11 @@ def _format_time(ts: str) -> str:
     return d.strftime("%Y-%m-%d %H:%M:%SZ")
 
 
+def _preview_line(p: LinkPreview) -> str:
+    label = " — ".join(x for x in (p.service_name, _WHITESPACE_RUN.sub(" ", p.title) if p.title else None) if x)
+    return f"  [link preview, auto-generated: {label or 'untitled'}{f' <{p.url}>' if p.url else ''}]"
+
+
 def format_transcript(channel: ChannelRef, root_ts: str, messages: list[ThreadMessage]) -> str:
     where = f"direct message {channel.name or channel.id}" if channel.is_im else f"#{channel.name or channel.id}"
     lines = [f"Thread in {where} (root {root_ts}), {len(messages)} message(s):", ""]
@@ -169,11 +192,13 @@ def format_transcript(channel: ChannelRef, root_ts: str, messages: list[ThreadMe
         else:
             body = m.markdown or ("" if m.files else "_(empty)_")
         files = f"\n  [files: {', '.join(f.name for f in m.files)}]" if m.files else ""
+        previews = [] if m.is_deleted else [_preview_line(p) for p in m.link_previews]
         via = f" [attribution: {_WHITESPACE_RUN.sub(' ', m.attribution.text)}]" if m.attribution else ""
         lines.append(f"[{_format_time(m.ts)}] {who}{handle}{via}:")
         lines.extend(f"  {line}" for line in body.split("\n"))
         if files:
             lines.append(files)
+        lines.extend(previews)
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -234,6 +259,7 @@ class ThreadsApi:
                 ts=_s(r.msg.get("ts")) or "",
                 sender=r.sender,
                 markdown=r.markdown,
+                link_previews=r.link_previews,
                 attribution=r.attribution,
                 files=r.files,
                 mentions=r.mentions,
@@ -277,6 +303,7 @@ class ThreadsApi:
                     ts=_s(r.msg.get("ts")) or "",
                     sender=r.sender,
                     markdown=r.markdown,
+                    link_previews=r.link_previews,
                     attribution=r.attribution,
                     files=r.files,
                     mentions=r.mentions,
@@ -381,7 +408,10 @@ class SearchMessageHit:
     ts: str
     channel: ChannelRef
     sender: UserRef
+    #: What the sender wrote, as standard Markdown; link previews are in ``link_previews``.
     markdown: str
+    #: Link previews (unfurls) attached to the message (spec §6.5); empty when none.
+    link_previews: list[LinkPreview] = field(default_factory=list)
     thread_ts: str | None = None
     permalink: str | None = None
     #: Self-declared agent attribution line, removed from ``markdown`` (spec §9.1). Unverified.
@@ -465,6 +495,7 @@ class SearchApi:
                 ),
                 sender=r2.sender,
                 markdown=strip_highlight(r2.markdown),
+                link_previews=r2.link_previews,
                 attribution=r2.attribution,
                 files=r2.files,
                 mentions=r2.mentions,
@@ -622,9 +653,12 @@ class HistoryThread:
 class HistoryMessage:
     ts: str
     sender: UserRef
+    #: What the sender wrote, as standard Markdown; link previews are in ``link_previews``.
     markdown: str
     files: list[FileRef]
     thread: HistoryThread | None
+    #: Link previews (unfurls) attached to the message (spec §6.5); empty when none.
+    link_previews: list[LinkPreview] = field(default_factory=list)
     #: Self-declared agent attribution line, removed from ``markdown`` (spec §9.1). Unverified.
     attribution: MessageAttribution | None = None
     #: Users, user groups and broadcasts mentioned in the body.
@@ -876,6 +910,7 @@ def _to_history_message(r: _Rendered) -> HistoryMessage:
         ts=_s(msg.get("ts")) or "",
         sender=r.sender,
         markdown=r.markdown,
+        link_previews=r.link_previews,
         attribution=r.attribution,
         files=r.files,
         mentions=r.mentions,

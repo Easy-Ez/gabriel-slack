@@ -139,9 +139,12 @@ Every payload is plain JSON-serializable data (schema:
 
 Key fields of `message.created`: `ts`, `channel {id,name,isPrivate,isIm,isMpim}`,
 `sender {id,displayName,handle,isBot,isExternal}`, `origin`, `text` (raw mrkdwn),
-`markdown` (standard Markdown, mentions rendered as `@Name`), `thread {rootTs,isReply,broadcast} | null`,
-`isThreadReply`, `threadTs`, `mentions[]`, `mentionReasons`, `isMentioningMe`, `files[]`,
-`delivery` (`realtime` | `backfill`), `raw`.
+`markdown` (standard Markdown of what the sender wrote, mentions rendered as `@Name`),
+`linkPreviews[]` (`{url, serviceName?, title?, text?}`: link unfurls, never part of `markdown`),
+`thread {rootTs,isReply,broadcast} | null`, `isThreadReply`, `threadTs`, `mentions[]`,
+`mentionReasons`, `isMentioningMe`, `files[]`, `delivery` (`realtime` | `backfill`), `raw`.
+`message.updated` carries `currentLinkPreviews`; Slack often adds a preview a few seconds after the
+message, as a `message.updated` whose `currentMarkdown` did not change.
 
 **Mentions.** `mentionReasons` says why a message mentions you: `"direct"` (you, by ID),
 `"usergroup"` (a user group you belong to) and / or `"broadcast"` (`@here` / `@channel` /

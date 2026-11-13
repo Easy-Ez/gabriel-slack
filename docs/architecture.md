@@ -195,7 +195,9 @@ so reconnects do not flood handlers with "user is online" events.
 ## 10. AI safety
 
 * `evt.toLLMContext()` separates metadata from content and wraps content in an
-  `untrusted="true"` envelope, neutralizing sequences that could close it.
+  `untrusted="true"` envelope, neutralizing sequences that could close it. Link previews (unfurls)
+  are kept out of `markdown` and listed in their own section, labelled as generated automatically
+  rather than written by the sender.
 * `client.scope(policy)` returns the same API restricted to allow-listed channels, optionally
   without search, with a download size cap, an action allow-list, an approval hook for every
   write, and — with `trigger_thread_only` — writes limited to the channel and thread that
