@@ -107,6 +107,12 @@ describe("versions", () => {
     const text = '{\n  "name": "gabriel-slack",\n  "version": "0.1.1",\n  "dependencies": { "ws": "^8.0.0" }\n}\n';
     assert.equal(withNodeVersion(text, "0.2.0"), text.replace("0.1.1", "0.2.0"));
   });
+
+  it("accepts a package.json that already has the target version", () => {
+    const text = '{\n  "name": "gabriel-slack",\n  "version": "0.2.0"\n}\n';
+    assert.equal(withNodeVersion(text, "0.2.0"), text);
+    assert.throws(() => withNodeVersion('{ "name": "gabriel-slack" }', "0.2.0"), /no version field/);
+  });
 });
 
 describe("changes", () => {

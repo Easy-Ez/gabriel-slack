@@ -410,9 +410,10 @@ export function readVersion(root, pkg) {
 
 /** Replaces the version in package.json text without reformatting the file. */
 export function withNodeVersion(packageJson, version) {
-  const next = packageJson.replace(/^(\s*"version":\s*")[^"]+(")/m, `$1${version}$2`);
-  if (next === packageJson) throw new Error("no version field in package.json");
-  return next;
+  const field = /^(\s*"version":\s*")[^"]+(")/m;
+  // The version may already be the target (bumped by hand in a pull request).
+  if (!field.test(packageJson)) throw new Error("no version field in package.json");
+  return packageJson.replace(field, `$1${version}$2`);
 }
 
 /** API surface maps of a package at `ref` and at HEAD; null when tooling is missing. */
