@@ -2,6 +2,7 @@ import type { RawWsFrame } from "../core/types.js";
 import type { GabrielCore } from "../core/core.js";
 import type { ConnectionGapEvent } from "../events/types.js";
 import type { StateStore } from "../state/store.js";
+import { GabrielError } from "../errors.js";
 import type { Logger } from "../util/logger.js";
 import { compareTs, isTs, maxTs } from "../util/validate.js";
 import type { ChannelsApi } from "./apis.js";
@@ -26,7 +27,12 @@ function minOf(sets: Array<Set<string>>): string | undefined {
  */
 export class WatermarkTracker {
   private readonly lanes = new Map<string, Lane>();
+  /** Activity list: threads this client wrote in or subscribed to (bounded LRU). */
   private readonly watchedThreads = new Map<string, { channel: string; threadTs: string }>();
+  /** Explicit list: local-only `threads.watch()`; never evicted by the LRU. */
+  private readonly explicitThreads = new Map<string, { channel: string; threadTs: string }>();
+  /** Thread watermark keys to delete from the store on the next flush. */
+  private readonly droppedThreadMarks = new Set<string>();
   private flushTimer: NodeJS.Timeout | undefined;
 
   constructor(
@@ -34,6 +40,7 @@ export class WatermarkTracker {
     private readonly teamId: () => string,
     private readonly watchedThreadsLimit: number,
     private readonly logger: Logger,
+    private readonly maxExplicitThreadWatches = 500,
   ) {}
 
   private lane(key: string): Lane {
@@ -42,18 +49,22 @@ export class WatermarkTracker {
     return l;
   }
 
-  private keysFor(channel: string, threadTs?: string): string[] {
-    const keys = [`c:${channel}`];
-    if (threadTs && this.watchedThreads.has(`${channel}:${threadTs}`)) keys.push(`t:${channel}:${threadTs}`);
+  /**
+   * `threadOnly`: replies fetched directly from a thread (not part of channel history) move only
+   * the thread's lane, so they never start or advance channel-history recovery.
+   */
+  private keysFor(channel: string, threadTs?: string, threadOnly = false): string[] {
+    const keys = threadOnly ? [] : [`c:${channel}`];
+    if (threadTs && this.isThreadWatched(channel, threadTs)) keys.push(`t:${channel}:${threadTs}`);
     return keys;
   }
 
-  begin(channel: string, ts: string, threadTs?: string): void {
-    for (const k of this.keysFor(channel, threadTs)) this.lane(k).inflight.add(ts);
+  begin(channel: string, ts: string, threadTs?: string, threadOnly = false): void {
+    for (const k of this.keysFor(channel, threadTs, threadOnly)) this.lane(k).inflight.add(ts);
   }
 
-  complete(channel: string, ts: string, threadTs?: string): void {
-    for (const k of this.keysFor(channel, threadTs)) {
+  complete(channel: string, ts: string, threadTs?: string, threadOnly = false): void {
+    for (const k of this.keysFor(channel, threadTs, threadOnly)) {
       const l = this.lane(k);
       l.inflight.delete(ts);
       l.completed.add(ts);
@@ -63,8 +74,8 @@ export class WatermarkTracker {
   }
 
   /** Overflow: keeps the watermark below `ts` until a gap recovery re-delivers it. */
-  pin(channel: string, ts: string, threadTs?: string): void {
-    for (const k of this.keysFor(channel, threadTs)) {
+  pin(channel: string, ts: string, threadTs?: string, threadOnly = false): void {
+    for (const k of this.keysFor(channel, threadTs, threadOnly)) {
       const l = this.lane(k);
       l.inflight.delete(ts);
       l.pinned.add(ts);
@@ -115,11 +126,19 @@ export class WatermarkTracker {
 
   threadWatermarks(): Array<{ channel: string; threadTs: string; wm: string }> {
     const out: Array<{ channel: string; threadTs: string; wm: string }> = [];
-    for (const { channel, threadTs } of this.watchedThreads.values()) {
-      const l = this.lanes.get(`t:${channel}:${threadTs}`);
-      out.push({ channel, threadTs, wm: l?.wm ?? threadTs });
+    const seen = new Set<string>();
+    for (const list of [this.explicitThreads, this.watchedThreads]) {
+      for (const [key, { channel, threadTs }] of list) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ channel, threadTs, wm: this.threadWatermark(channel, threadTs) });
+      }
     }
     return out;
+  }
+
+  threadWatermark(channel: string, threadTs: string): string {
+    return this.lanes.get(`t:${channel}:${threadTs}`)?.wm ?? threadTs;
   }
 
   /** Adds a thread to the bounded LRU of threads whose replies are recovered directly. */
@@ -130,19 +149,73 @@ export class WatermarkTracker {
     while (this.watchedThreads.size > this.watchedThreadsLimit) {
       const oldest = this.watchedThreads.keys().next().value as string;
       this.watchedThreads.delete(oldest);
-      this.lanes.delete(`t:${oldest}`);
+      this.dropThreadLane(oldest);
     }
     this.scheduleFlush();
   }
 
   unwatchThread(channel: string, threadTs: string): void {
-    this.watchedThreads.delete(`${channel}:${threadTs}`);
-    this.lanes.delete(`t:${channel}:${threadTs}`);
+    const key = `${channel}:${threadTs}`;
+    this.watchedThreads.delete(key);
+    this.dropThreadLane(key);
     this.scheduleFlush();
   }
 
+  /**
+   * Adds a thread to the explicit (local-only) list. Its watermark becomes the newer of the
+   * current one and `after` (default: the root). Throws when a new thread exceeds the bound.
+   */
+  watchExplicit(channel: string, threadTs: string, after?: string): void {
+    const key = `${channel}:${threadTs}`;
+    if (!this.explicitThreads.has(key) && this.explicitThreads.size >= this.maxExplicitThreadWatches) {
+      throw new GabrielError(
+        "SUBSCRIPTION_CAP_EXCEEDED",
+        `explicit thread watches would reach ${this.explicitThreads.size + 1} (> ${this.maxExplicitThreadWatches})`,
+      );
+    }
+    this.explicitThreads.set(key, { channel, threadTs });
+    const lane = this.lane(`t:${key}`);
+    const initial = maxTs(threadTs, after) as string;
+    if (lane.wm === undefined || compareTs(initial, lane.wm) > 0) {
+      lane.wm = initial;
+      lane.dirty = true;
+    }
+    this.scheduleFlush();
+  }
+
+  unwatchExplicit(channel: string, threadTs: string): void {
+    const key = `${channel}:${threadTs}`;
+    if (!this.explicitThreads.delete(key)) return;
+    this.dropThreadLane(key);
+    this.scheduleFlush();
+  }
+
+  explicitWatches(): Array<{ channel: string; threadTs: string; watermark: string }> {
+    return [...this.explicitThreads.values()].map(({ channel, threadTs }) => ({ channel, threadTs, watermark: this.threadWatermark(channel, threadTs) }));
+  }
+
+  isExplicitlyWatched(channel: string, threadTs: string): boolean {
+    return this.explicitThreads.has(`${channel}:${threadTs}`);
+  }
+
   isThreadWatched(channel: string, threadTs: string): boolean {
-    return this.watchedThreads.has(`${channel}:${threadTs}`);
+    const key = `${channel}:${threadTs}`;
+    return this.watchedThreads.has(key) || this.explicitThreads.has(key);
+  }
+
+  /** Clears overflow pins of one thread lane after its replies were refetched. */
+  unpinThread(channel: string, threadTs: string): void {
+    const l = this.lanes.get(`t:${channel}:${threadTs}`);
+    if (!l || l.pinned.size === 0) return;
+    l.pinned.clear();
+    this.advance(l);
+  }
+
+  /** Forgets a thread's lane and stored watermark once neither list holds the thread. */
+  private dropThreadLane(key: string): void {
+    if (this.watchedThreads.has(key) || this.explicitThreads.has(key)) return;
+    this.lanes.delete(`t:${key}`);
+    this.droppedThreadMarks.add(key);
   }
 
   async load(): Promise<void> {
@@ -157,10 +230,20 @@ export class WatermarkTracker {
     if (raw) {
       try {
         for (const t of JSON.parse(raw) as Array<{ channel: string; threadTs: string }>) {
-          if (typeof t.channel === "string" && isTs(t.threadTs)) this.watchedThreads.set(`${t.channel}:${t.threadTs}`, t);
+          if (typeof t.channel === "string" && isTs(t.threadTs)) this.watchedThreads.set(`${t.channel}:${t.threadTs}`, { channel: t.channel, threadTs: t.threadTs });
         }
       } catch {
         this.logger.warn({}, "ignoring corrupt watched-thread list");
+      }
+    }
+    const explicit = await this.store.get(`gabriel:watches:${this.teamId()}`);
+    if (explicit) {
+      try {
+        for (const t of JSON.parse(explicit) as Array<{ channel: string; threadTs: string }>) {
+          if (typeof t.channel === "string" && isTs(t.threadTs)) this.explicitThreads.set(`${t.channel}:${t.threadTs}`, { channel: t.channel, threadTs: t.threadTs });
+        }
+      } catch {
+        this.logger.warn({}, "ignoring corrupt explicit thread-watch list");
       }
     }
   }
@@ -178,6 +261,10 @@ export class WatermarkTracker {
     clearTimeout(this.flushTimer);
     this.flushTimer = undefined;
     const team = this.teamId();
+    // Deletions first: a thread dropped and watched again starts from its new watermark.
+    const dropped = [...this.droppedThreadMarks];
+    this.droppedThreadMarks.clear();
+    await Promise.all(dropped.map((key) => this.store.delete(`gabriel:wm:${team}:t:${key}`)));
     const writes: Array<Promise<unknown>> = [];
     for (const [k, l] of this.lanes) {
       if (!l.dirty || l.wm === undefined) continue;
@@ -185,7 +272,47 @@ export class WatermarkTracker {
       writes.push(this.store.maxMergeTs(`gabriel:wm:${team}:${k}`, l.wm));
     }
     writes.push(this.store.set(`gabriel:threads:${team}`, JSON.stringify([...this.watchedThreads.values()])));
+    writes.push(this.store.set(`gabriel:watches:${team}`, JSON.stringify([...this.explicitThreads.values()])));
     await Promise.all(writes);
+  }
+}
+
+export interface ThreadFetchResult {
+  /** Replies newer than the watermark, as raw message frames (root excluded). */
+  frames: RawWsFrame[];
+  /** Why the fetch stopped early; frames fetched before that are still returned. */
+  failure?: "page_limit" | "rate_limited" | "api_error";
+}
+
+const reasonOf = (err: unknown) => ((err as { code?: string }).code === "RATE_LIMITED" ? "rate_limited" : "api_error") as "rate_limited" | "api_error";
+
+/** `conversations.replies(oldest = wm, inclusive = false)`, bounded pages. Never throws. */
+export async function fetchThreadReplies(
+  core: GabrielCore,
+  t: { channel: string; threadTs: string; wm: string },
+  maxPages: number,
+): Promise<ThreadFetchResult> {
+  const frames: RawWsFrame[] = [];
+  let cursor: string | undefined;
+  let pages = 0;
+  try {
+    do {
+      const res = await core.callWebApi<{ messages?: Array<Record<string, unknown>>; has_more?: boolean; response_metadata?: { next_cursor?: string } }>(
+        "conversations.replies",
+        { channel: t.channel, ts: t.threadTs, oldest: t.wm, inclusive: false, limit: 100, include_tombstones: true, ...(cursor ? { cursor } : {}) },
+        { reason: "history-api/fetchReplies" },
+      );
+      pages++;
+      for (const m of res.messages ?? []) {
+        if (typeof m.ts !== "string" || m.ts === t.threadTs || compareTs(m.ts, t.wm) <= 0) continue;
+        frames.push({ ...m, type: "message", channel: t.channel });
+      }
+      cursor = res.has_more ? res.response_metadata?.next_cursor || undefined : undefined;
+      if (cursor && pages >= maxPages) return { frames, failure: "page_limit" };
+    } while (cursor);
+    return { frames };
+  } catch (err) {
+    return { frames, failure: reasonOf(err) };
   }
 }
 
@@ -228,7 +355,6 @@ export async function recoverGap(
     latestByChannel = new Map();
   }
 
-  const reasonOf = (err: unknown) => ((err as { code?: string }).code === "RATE_LIMITED" ? "rate_limited" : "api_error") as "rate_limited" | "api_error";
   let minFrom: string | undefined;
   let maxTo: string | undefined;
 
@@ -263,32 +389,12 @@ export async function recoverGap(
   }
 
   for (const t of marks.threadWatermarks()) {
-    let cursor: string | undefined;
-    let pages = 0;
-    let got = 0;
-    try {
-      do {
-        const res = await core.callWebApi<{ messages?: Array<Record<string, unknown>>; has_more?: boolean; response_metadata?: { next_cursor?: string } }>(
-          "conversations.replies",
-          { channel: t.channel, ts: t.threadTs, oldest: t.wm, inclusive: false, limit: 100, include_tombstones: true, ...(cursor ? { cursor } : {}) },
-          { reason: "history-api/fetchReplies" },
-        );
-        pages++;
-        for (const m of res.messages ?? []) {
-          if (typeof m.ts !== "string" || m.ts === t.threadTs || compareTs(m.ts, t.wm) <= 0) continue;
-          frames.push({ ...m, type: "message", channel: t.channel });
-          got++;
-        }
-        cursor = res.has_more ? res.response_metadata?.next_cursor || undefined : undefined;
-        if (cursor && pages >= opts.maxPagesPerChannel) {
-          gap.truncated = true;
-          gap.unrecovered.push({ channel: t.channel, threadTs: t.threadTs, fromTs: t.wm, reason: "page_limit" });
-          break;
-        }
-      } while (cursor);
-      if (got > 0) gap.threadsRecovered.push({ channel: t.channel, threadTs: t.threadTs });
-    } catch (err) {
-      gap.unrecovered.push({ channel: t.channel, threadTs: t.threadTs, fromTs: t.wm, reason: reasonOf(err) });
+    const res = await fetchThreadReplies(core, t, opts.maxPagesPerChannel);
+    frames.push(...res.frames);
+    if (res.frames.length > 0 && (!res.failure || res.failure === "page_limit")) gap.threadsRecovered.push({ channel: t.channel, threadTs: t.threadTs });
+    if (res.failure) {
+      if (res.failure === "page_limit") gap.truncated = true;
+      gap.unrecovered.push({ channel: t.channel, threadTs: t.threadTs, fromTs: t.wm, reason: res.failure });
     }
   }
 

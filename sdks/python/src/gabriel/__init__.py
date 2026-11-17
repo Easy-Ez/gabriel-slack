@@ -19,6 +19,8 @@ from .client.apis import (
     SearchPage,
     ThreadContext,
     ThreadMessage,
+    ThreadWatchResult,
+    WatchedThread,
 )
 from .client.chat import ChatSchedulerOptions, SendResult, UpdateResult
 from .client.client import (
@@ -148,7 +150,9 @@ __all__ = [
     "SubscriptionHandle",
     "ThreadContext",
     "ThreadMessage",
+    "ThreadWatchResult",
     "UpdateResult",
+    "WatchedThread",
     "WebSocketFactory",
     "WebSocketLike",
     "WorkspaceInfo",

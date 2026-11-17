@@ -136,12 +136,37 @@ export function formatTranscript(channel: ChannelRef, rootTs: string, messages: 
   return lines.join("\n").trimEnd();
 }
 
+/** Result of {@link ThreadsApi.watch}. */
+export interface ThreadWatchResult {
+  /** Replies delivered as `message.created` (`delivery: "backfill"`) by this call, duplicates excluded. */
+  recovered: number;
+  /** false when the fetch failed or hit the page limit; the thread stays watched and is retried later. */
+  complete: boolean;
+}
+
+/** An explicitly watched thread and its recovery watermark. */
+export interface WatchedThread {
+  channel: string;
+  threadTs: string;
+  watermark: string;
+}
+
+/** Hooks into the client's recovery state (watermarks, local watch lists, backfill delivery). */
+export interface ThreadWatchHooks {
+  /** Activity list (LRU) used by subscribe() / unsubscribe(). */
+  noteSubscribed(channel: string, threadTs: string): void;
+  noteUnsubscribed(channel: string, threadTs: string): void;
+  /** Explicit, local-only list. */
+  watch(channel: string, threadTs: string, after: string | undefined): Promise<ThreadWatchResult>;
+  unwatch(channel: string, threadTs: string): void;
+  watched(): WatchedThread[];
+}
+
 export class ThreadsApi {
   constructor(
     private readonly core: GabrielCore,
     private readonly h: Hydrator,
-    private readonly onWatch: (channel: string, threadTs: string) => void,
-    private readonly onUnwatch: (channel: string, threadTs: string) => void,
+    private readonly hooks: ThreadWatchHooks,
   ) {}
 
   private async page(channel: string, ts: string, limit: number, cursor?: string, oldest?: string) {
@@ -229,18 +254,55 @@ export class ThreadsApi {
     );
   }
 
+  /**
+   * Subscribes the user to the thread **on Slack** (`subscriptions.thread.add`: it appears in the
+   * user's Threads view and notifies them) and adds it to the bounded activity list whose replies
+   * are recovered after reconnects. For a local-only watch that changes nothing on Slack, use
+   * {@link watch}.
+   */
   async subscribe(opts: { channel: string; threadTs: string }): Promise<void> {
     const channel = assertChannelId(opts.channel);
     const threadTs = assertTs(opts.threadTs, "threadTs");
     await this.core.callWebApi("subscriptions.thread.add", { channel, thread_ts: threadTs }, { reason: "thread-subscribe" });
-    this.onWatch(channel, threadTs);
+    this.hooks.noteSubscribed(channel, threadTs);
   }
 
+  /** Unsubscribes the user **on Slack** (`subscriptions.thread.remove`). Does not affect {@link watch}. */
   async unsubscribe(opts: { channel: string; threadTs: string }): Promise<void> {
     const channel = assertChannelId(opts.channel);
     const threadTs = assertTs(opts.threadTs, "threadTs");
     await this.core.callWebApi("subscriptions.thread.remove", { channel, thread_ts: threadTs }, { reason: "thread-unsubscribe" });
-    this.onUnwatch(channel, threadTs);
+    this.hooks.noteUnsubscribed(channel, threadTs);
+  }
+
+  /**
+   * Watches a thread **locally only** (spec/behavior.md §10.1): its replies are recovered after
+   * reconnects and restarts (persisted in the state store) without writing anything to Slack — no
+   * `subscriptions.*`, no mark, no message.
+   *
+   * The thread's watermark becomes the newer of its current one and `after` (default `threadTs`).
+   * Replies after the watermark are fetched right away and delivered as `message.created` with
+   * `delivery: "backfill"`, de-duplicated against realtime events; the promise resolves once their
+   * handlers have finished (from inside a handler: once they are queued). Fetch failures resolve
+   * with `complete: false` and are retried by the next recovery. Throws only for invalid arguments
+   * (`INVALID_ARGUMENT`), a client that was never started (`INVALID_STATE`) or more than
+   * `recovery.maxExplicitThreadWatches` threads (`SUBSCRIPTION_CAP_EXCEEDED`).
+   */
+  async watch(opts: { channel: string; threadTs: string; after?: string }): Promise<ThreadWatchResult> {
+    const channel = assertChannelId(opts.channel);
+    const threadTs = assertTs(opts.threadTs, "threadTs");
+    const after = opts.after === undefined ? undefined : assertTs(opts.after, "after");
+    return this.hooks.watch(channel, threadTs, after);
+  }
+
+  /** Stops a local {@link watch}. Calls nothing on Slack; idempotent. */
+  unwatch(opts: { channel: string; threadTs: string }): void {
+    this.hooks.unwatch(assertChannelId(opts.channel), assertTs(opts.threadTs, "threadTs"));
+  }
+
+  /** Threads watched with {@link watch}, with their current recovery watermarks. */
+  watched(): WatchedThread[] {
+    return this.hooks.watched();
   }
 }
 

@@ -184,7 +184,7 @@ client.on("message.created", async (evt, ctx) => {
 | 模块 | 方法 |
 | :--- | :--- |
 | `client.chat` | `send({ channel, markdown \| blocks, threadTs?, broadcast?, priority?, preserveUnreadCursor?, autoChunk? })`、`update`、`delete`、`sendTyping`、`createStream` |
-| `client.threads` | `getContext({ channel, threadTs, limit })`、`iterateReplies`、`markRead`、`subscribe`、`unsubscribe` |
+| `client.threads` | `getContext({ channel, threadTs, limit })`、`iterateReplies`、`markRead`、`subscribe`、`unsubscribe`（会改 Slack 上的订阅状态）；`watch({ channel, threadTs, after? })`、`unwatch`、`watched()`（只在本地生效） |
 | `client.files` | `upload`、`downloadStream` / `downloadBuffer`（`maxBytes`）、`getInfo`、`delete` |
 | `client.search` | `messages`、`files`、`channels`、`people`、`iterateMessages`、`iterateFiles` |
 | `client.presence` | `watch(userIds, { trackProfileAndDnd })`、`watchProfiles(userIds)`、`getStatus(userId)` |
@@ -325,6 +325,7 @@ await client.chat.send({ channel, markdown: "我自己发的", attribution: fals
 * **顺序**：实名解析并行进行，但同频道事件严格按到达顺序派发。
 * **去重**：按 `eventId` 去重，重连重放或补拉都不会让你收到重复事件。
 * **断线补齐**：冷重连后，或者使用持久化存储重启后，SDK 会补拉错过的频道消息，以及你参与过 / 订阅过的线程回复，以 `delivery: "backfill"` 按时间顺序先派发，再派发新到的实时消息，最后派发一个 `connection.gap` 报告。`recovered === false` 时，`unrecovered[]` 会精确列出哪些范围没能补回。**请对它设置告警**，而不是假定 100% 不丢。
+* **只在本地关注线程**：`threads.subscribe()` 会调用 `subscriptions.thread.add`，线程会出现在用户的"线程"列表里并开始通知，属于写操作。`threads.watch({ channel, threadTs, after? })` 只把线程加入本地补拉名单，不发任何写请求：名单和水位存进 StateStore，重启后照常补拉；上限 `recovery.maxExplicitThreadWatches`（默认 500，超出抛 `SUBSCRIPTION_CAP_EXCEEDED`），不会被"发过言的线程"那份 100 条的 LRU 挤掉。调用后立即补拉 `after`（默认线程根）之后的回复，以 `delivery: "backfill"` 派发，等处理器执行完再返回 `{ recovered, complete }`；网络或接口失败时不抛错，返回 `complete: false`，下次重连再补。Slack 推送了被关注线程的 `message.thread_meta_updated`，但回复本身在 `recovery.threadReplyGraceMs`（默认 2 秒）内没有实时到达时，SDK 会按水位再补拉一次。`unwatch()` 移出名单，`watched()` 列出名单和水位。
 * **状态存储**：默认 `MemoryStateStore`（重启后状态丢失）；单机长期运行用 `new FileStateStore({ dir })`，重启后从持久化的位置继续补拉。
 * **过载**：在途事件超过上限时丢弃新事件并派发 `guard.overflow`，这些事件会在下次补拉时找回，网络读取永远不会被阻塞。
 * **优雅停机**：`client.stop({ drainMs })` 依次停止接收、等待处理器（超时则取消）、给未完成的流式回复追加中断标记、发完队列中的消息、保存状态、关闭连接。
@@ -389,7 +390,8 @@ new GabrielClient({
   loopGuard: { includeSelfMessages: false, maxAutoRepliesPerMinute: 5 },
   chat: { globalSendConcurrency: 4, itemDeadlineMs: 30_000, streamUpdatesPerSecond: 2,
           streamMinIntervalMs: 500, interruptedNotice: "\n\n_(已中断)_" },
-  recovery: { maxPagesPerChannel: 10, watchedThreadsLimit: 100, resyncBufferLimit: 10_000 },
+  recovery: { maxPagesPerChannel: 10, watchedThreadsLimit: 100, maxExplicitThreadWatches: 500,
+              threadReplyGraceMs: 2_000, resyncBufferLimit: 10_000 },
   stateStore: new FileStateStore({ dir: "/var/lib/my-agent/gabriel" }),
   logger: consoleLogger("info"),
   metrics: { increment(name, labels) {}, observe(name, value, labels) {} },

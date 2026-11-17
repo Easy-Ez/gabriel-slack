@@ -206,7 +206,7 @@ reaching other handlers. Handlers for one channel run one at a time in arrival o
 | Namespace | Methods |
 | :--- | :--- |
 | `client.chat` | `send(channel, markdown, *, blocks, thread_ts, broadcast, priority, preserve_unread_cursor, auto_chunk, attribution)`, `update`, `delete`, `send_typing`, `create_stream`, `stream` (async context manager), `preview_attribution` |
-| `client.threads` | `get_context(channel, thread_ts, limit=50)` → messages, participants, `formatted_transcript`; `iterate_replies`, `mark_read`, `subscribe`, `unsubscribe` |
+| `client.threads` | `get_context(channel, thread_ts, limit=50)` → messages, participants, `formatted_transcript`; `iterate_replies`, `mark_read`, `subscribe`, `unsubscribe` (write Slack's subscription state); `watch(channel, thread_ts, after=None)`, `unwatch`, `watched()` (local only, see below) |
 | `client.files` | `upload(filename, content, …)` (3-step, streaming), `download_stream` / `download_bytes` (`max_bytes`, sign-in page detection), `get_info`, `delete` |
 | `client.search` | `messages`, `files`, `channels`, `people`, `iterate_messages`, `iterate_files` |
 | `client.presence` | `watch(user_ids, track_profile_and_dnd=False)` / `watch_profiles(user_ids)` → handle (`await h.unsubscribe()` / `async with`), `get_status(user_id)` |
@@ -305,6 +305,20 @@ it is self-declared by the sender, so treat it as a display hint, never as proof
 * **Recovery**: after a cold reconnect, or a restart with a persistent store, missed channel
   messages and watched-thread replies are delivered as `delivery="backfill"` before newer realtime
   messages, followed by a `connection.gap` report.
+* **Watching a thread without touching Slack**: `threads.subscribe()` calls
+  `subscriptions.thread.add`, which puts the thread in the user's Threads view and turns on
+  notifications. `threads.watch()` only adds the thread to the local recovery list (persisted in the
+  state store, up to `max_explicit_thread_watches`, default 500, never evicted by the 100-thread
+  activity list) and sends no write request. It fetches the replies after `after` (default: the
+  root) right away, delivers them as `delivery="backfill"` and returns once their handlers finished.
+  When Slack announces a reply of a watched thread (`message.thread_meta_updated`) without pushing
+  the reply itself within `thread_reply_grace` (2 s), the thread is fetched again.
+
+  ```python
+  res = await client.threads.watch(channel, thread_ts, after=last_seen_ts)
+  # res.complete is False: the fetch failed; the thread stays watched and is retried on reconnect
+  client.threads.unwatch(channel, thread_ts)
+  ```
 * **State stores**: `MemoryStateStore` (default) and `FileStateStore(dir)` (single host; same file
   format as the Node SDK). Implement the `StateStore` protocol for other backends.
 * **Shutdown**: `await client.stop(drain=10.0)` (or leaving `async with`) drains handlers, interrupts
@@ -356,7 +370,8 @@ GabrielClient(
     chat=ChatSchedulerOptions(global_send_concurrency=4, item_deadline=30.0, stream_updates_per_second=2,
                               stream_min_interval=0.5, interrupted_notice="\n\n_(interrupted)_"),
     attribution={"name": "Paimon", "role": "Assistant"},   # default: None (no attribution line)
-    recovery=RecoveryOptions(max_pages_per_channel=10, watched_threads_limit=100, resync_buffer_limit=10_000),
+    recovery=RecoveryOptions(max_pages_per_channel=10, watched_threads_limit=100, max_explicit_thread_watches=500,
+                             thread_reply_grace=2.0, resync_buffer_limit=10_000),
     state_store=FileStateStore("/var/lib/my-agent/gabriel"),
     logger=console_logger("info"),       # default: stdlib logging, logger name "gabriel"
     metrics=my_metrics,                  # increment(name, labels) / observe(name, value, labels)

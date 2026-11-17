@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import inspect
 import time
 from collections import deque
@@ -30,6 +31,7 @@ from ..events.types import (
     LoopDetectedEvent,
     MessageCreatedEvent,
     MessageOtherEvent,
+    MessageThreadMetaUpdatedEvent,
     MessageUpdatedEvent,
     OverflowEvent,
     ProtocolDriftEvent,
@@ -42,8 +44,18 @@ from ..state.store import MemoryStateStore, StateStore
 from ..util.aio import AbortController, AbortSignal, spawn
 from ..util.logger import Logger, stdlib_logger
 from ..util.lru import LruCache
-from ..util.validate import compare_ts, is_subteam_id
-from .apis import ActivityApi, ChannelsApi, ReactionsApi, SearchApi, ThreadsApi, UsersApi
+from ..util.validate import compare_ts, is_subteam_id, is_ts
+from .apis import (
+    ActivityApi,
+    ChannelsApi,
+    ReactionsApi,
+    SearchApi,
+    ThreadsApi,
+    ThreadWatchHooks,
+    ThreadWatchResult,
+    UsersApi,
+    WatchedThread,
+)
 from .chat import ChatApi, ChatSchedulerOptions, SendResult
 from .context import (
     MessageMatcher,
@@ -63,7 +75,7 @@ from .files import FilesApi
 from .hydrator import HydrationResult, Hydrator, UsergroupRecord
 from .origin import LoopBreaker, SelfRegistry
 from .presence import PresenceApi
-from .recovery import WatermarkTracker, recover_gap
+from .recovery import ThreadWatermark, WatermarkTracker, fetch_thread_replies, recover_gap
 from .scope import ScopedClient, ScopePolicy
 from .stream import StreamController
 from .unread import UnreadCursorGuard
@@ -117,8 +129,13 @@ class LoopGuardOptions:
 class RecoveryOptions:
     #: History pages fetched per channel during gap recovery (default 10).
     max_pages_per_channel: int = 10
-    #: Threads whose replies are recovered directly (LRU, default 100).
+    #: Threads written in or subscribed to whose replies are recovered directly (LRU, default 100).
     watched_threads_limit: int = 100
+    #: Threads that can be watched with ``threads.watch()`` at once (default 500); never evicted.
+    max_explicit_thread_watches: int = 500
+    #: Seconds a ``message_replied`` of an explicitly watched thread waits for the reply itself to
+    #: arrive in realtime before the thread is fetched (default 2.0).
+    thread_reply_grace: float = 2.0
     #: Max realtime frames buffered while resyncing (default 10000).
     resync_buffer_limit: int = 10_000
 
@@ -428,6 +445,7 @@ class GabrielClient:
         self._include_self_messages = lg.include_self_messages
         self._max_pages_per_channel = r.max_pages_per_channel
         self._resync_buffer_limit = r.resync_buffer_limit
+        self._thread_reply_grace = r.thread_reply_grace
         self._preload_usergroups = h.preload_usergroups
 
         self._executor: KeyedExecutor[_Routed] = KeyedExecutor(
@@ -437,7 +455,11 @@ class GabrielClient:
         self._registry = SelfRegistry(lambda: self.core.session.user_id)
         self._loop_breaker = LoopBreaker(lg.max_auto_replies_per_minute)
         self._marks = WatermarkTracker(
-            self._store, lambda: self.core.session.team_id, r.watched_threads_limit, self._logger
+            self._store,
+            lambda: self.core.session.team_id,
+            r.watched_threads_limit,
+            self._logger,
+            r.max_explicit_thread_watches,
         )
         self._unread = UnreadCursorGuard(self.core, self._registry, self._logger)
         self._waits = WaitRegistry()
@@ -458,7 +480,19 @@ class GabrielClient:
                 return client.core.session.user_id
 
         self.chat = ChatApi(self.core, self._registry, _Hooks(), self._logger, chat, attribution)
-        self.threads = ThreadsApi(self.core, self._hydrator, self._marks.watch_thread, self._marks.unwatch_thread)
+        self.threads = ThreadsApi(
+            self.core,
+            self._hydrator,
+            ThreadWatchHooks(
+                note_subscribed=self._marks.watch_thread,
+                note_unsubscribed=self._marks.unwatch_thread,
+                watch=self._watch_thread_locally,
+                unwatch=self._unwatch_thread_locally,
+                watched=lambda: [
+                    WatchedThread(channel=c, thread_ts=t, watermark=wm) for c, t, wm in self._marks.explicit_watches()
+                ],
+            ),
+        )
         self.files = FilesApi(self.core, self._hydrator, self._registry.register_client_msg_id)
         self.search = SearchApi(self.core, self._hydrator)
         self.reactions = ReactionsApi(self.core)
@@ -489,6 +523,15 @@ class GabrielClient:
         self._ready_waiters: list[asyncio.Future[None]] = []
         self._reconcile_timer: asyncio.TimerHandle | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
+        #: id(draft) → future resolved once a tracked (backfilled) draft is handled, dropped or abandoned.
+        self._done_futures: dict[int, asyncio.Future[None]] = {}
+        #: id(draft) of drafts fetched directly from a thread: they move only the thread watermark.
+        self._thread_only: set[int] = set()
+        #: "channel:thread_ts" → tail of the serialized fetches of that thread.
+        self._thread_fetches: dict[str, asyncio.Future[Any]] = {}
+        #: "channel:thread_ts" → pending ``message_replied`` fallback and the newest reply announced.
+        self._reply_fallbacks: dict[str, tuple[asyncio.TimerHandle, str]] = {}
+        self._marks_loaded = False
 
         self.core.on_raw_frame(self._on_frame)
         self.core.on_hello(self._on_hello_info)
@@ -573,6 +616,7 @@ class GabrielClient:
             self._started = False
             raise
         await self._marks.load()
+        self._marks_loaded = True
         if self._preload_usergroups:
             # Wait at most 5 s, but let a slow usergroups.list finish in the background.
             preload = spawn(self._hydrator.preload_usergroups(session.user_id), self._tasks)
@@ -603,6 +647,8 @@ class GabrielClient:
         if self._reconcile_timer is not None:
             self._reconcile_timer.cancel()
             self._reconcile_timer = None
+        for key in list(self._reply_fallbacks):
+            self._cancel_reply_fallback(key)
         # Events still hydrating are dropped by _route() (and pinned so a later recovery refetches them).
         lanes = [asyncio.shield(f) for f in self._lanes.values()]
         if lanes:
@@ -637,6 +683,7 @@ class GabrielClient:
         for q in list(self._pull_queues):
             q.close()
         self._started = False
+        self._marks_loaded = False
 
     async def __aenter__(self) -> GabrielClient:
         await self.start()
@@ -879,6 +926,8 @@ class GabrielClient:
             if key == self._last_badge_key:
                 return
             self._last_badge_key = key
+        if isinstance(evt, MessageThreadMetaUpdatedEvent):
+            self._note_thread_replied(evt)
         self._dispatch(draft, "realtime")
 
     def _on_message_frame(self, frame: RawWsFrame) -> None:
@@ -974,25 +1023,26 @@ class GabrielClient:
 
         nxt.add_done_callback(cleanup)
 
-    def _dispatch(self, draft: Draft, delivery: Literal["realtime", "backfill"]) -> None:
+    def _dispatch(self, draft: Draft, delivery: Literal["realtime", "backfill"]) -> bool:
+        """Returns False when the draft was dropped (duplicate or overflow) instead of being delivered."""
         if self._resync_buffer is not None and delivery == "realtime":
             if len(self._resync_buffer) >= self._resync_buffer_limit:
                 self._overflow(draft)
-                return
+                return False
             self._resync_buffer.append(draft)
-            return
+            return True
         event_id = draft.event.event_id
         if draft.dedupe and self._seen.has(event_id):
-            return
+            return False
         if self._inflight_events >= self._max_inflight_events:
             self._overflow(draft)
-            return
+            return False
         if draft.dedupe:
             self._seen.set(event_id, True)
         self._begin(draft)
         thread_ts = self._thread_of_draft(draft)
         if draft.created_ts and draft.channel_id:
-            self._marks.begin(draft.channel_id, draft.created_ts, thread_ts)
+            self._marks.begin(draft.channel_id, draft.created_ts, thread_ts, id(draft) in self._thread_only)
         hydration = asyncio.ensure_future(self._hydrator.hydrate(draft, self._hydrate_budget))
 
         async def step() -> None:
@@ -1004,6 +1054,13 @@ class GabrielClient:
                 self._complete(draft)
 
         self._chain(draft.lane_key, step)
+        return True
+
+    def _settle(self, draft: Draft) -> None:
+        self._thread_only.discard(id(draft))
+        fut = self._done_futures.pop(id(draft), None)
+        if fut is not None and not fut.done():
+            fut.set_result(None)
 
     def _thread_of_draft(self, draft: Draft) -> str | None:
         thread = getattr(draft.event, "thread", None)
@@ -1023,8 +1080,11 @@ class GabrielClient:
     def _overflow(self, draft: Draft) -> None:
         self._metrics.increment("events_dropped_total", {"type": draft.event.type})
         if draft.created_ts and draft.channel_id:
-            self._marks.pin(draft.channel_id, draft.created_ts, self._thread_of_draft(draft))
+            self._marks.pin(
+                draft.channel_id, draft.created_ts, self._thread_of_draft(draft), id(draft) in self._thread_only
+            )
         self._seen.delete(draft.event.event_id)
+        self._settle(draft)
         self._emit_guard(
             OverflowEvent(
                 event_id=self._synthetic_id("guard.overflow"), channel_id=draft.channel_id, ts=draft.created_ts
@@ -1035,14 +1095,20 @@ class GabrielClient:
         if not self._forget(draft):
             return
         if draft.created_ts and draft.channel_id:
-            self._marks.complete(draft.channel_id, draft.created_ts, self._thread_of_draft(draft))
+            self._marks.complete(
+                draft.channel_id, draft.created_ts, self._thread_of_draft(draft), id(draft) in self._thread_only
+            )
+        self._settle(draft)
 
     def _route(self, draft: Draft, hydration: HydrationResult) -> None:
         evt = draft.event
         if self._stopping and not evt.type.startswith("auth.") and not evt.type.startswith("connection."):
             if draft.created_ts and draft.channel_id:
-                self._marks.pin(draft.channel_id, draft.created_ts, self._thread_of_draft(draft))
+                self._marks.pin(
+                    draft.channel_id, draft.created_ts, self._thread_of_draft(draft), id(draft) in self._thread_only
+                )
             self._forget(draft)
+            self._settle(draft)
             return
         hydration.refresh()  # names that arrived while the event waited for its lane
         self._metrics.observe(
@@ -1335,6 +1401,144 @@ class GabrielClient:
         )
         where = f"{channel}/{thread_ts}" if thread_ts else channel
         raise GabrielError("LOOP_DETECTED", f"auto-reply circuit open for {where} ({check.count} writes in 60s)")
+
+    # -------------------------------------------------------------------------------------------
+    # local thread watches (spec/behavior.md §10.1)
+
+    async def _watch_thread_locally(self, channel: str, thread_ts: str, after: str | None) -> ThreadWatchResult:
+        if not self._marks_loaded or self._stopping:
+            raise GabrielError("INVALID_STATE", "threads.watch() needs a started client")
+        self._marks.watch_explicit(channel, thread_ts, after)
+        try:
+            await self._marks.flush()
+        except Exception as err:
+            self._logger.warn({"err": str(err)}, "watermark flush failed")
+        recovered, complete, handled = await self._fetch_watched_thread(channel, thread_ts)
+        # Inside a handler, waiting could block on the handler's own executor lane.
+        if current_trigger() is None and handled:
+            await asyncio.wait(handled)
+        return ThreadWatchResult(recovered=recovered, complete=complete)
+
+    def _unwatch_thread_locally(self, channel: str, thread_ts: str) -> None:
+        self._marks.unwatch_explicit(channel, thread_ts)
+        self._cancel_reply_fallback(f"{channel}:{thread_ts}")
+
+    def _fetch_watched_thread(
+        self, channel: str, thread_ts: str
+    ) -> asyncio.Future[tuple[int, bool, list[asyncio.Future[None]]]]:
+        """Fetches a watched thread from its watermark and delivers the replies as backfill.
+
+        Fetches of one thread are serialized; waiting for their handlers is not (the returned
+        futures), so a handler may trigger another fetch of its own thread. Never raises.
+        """
+        key = f"{channel}:{thread_ts}"
+        prev = self._thread_fetches.get(key)
+
+        async def run() -> tuple[int, bool, list[asyncio.Future[None]]]:
+            if prev is not None:
+                await asyncio.wait([prev])
+            return await self._deliver_thread_replies(channel, thread_ts)
+
+        task = spawn(run(), self._tasks)
+        self._thread_fetches[key] = task
+
+        def cleanup(_: object) -> None:
+            if self._thread_fetches.get(key) is task:
+                del self._thread_fetches[key]
+
+        task.add_done_callback(cleanup)
+        return task
+
+    async def _deliver_thread_replies(
+        self, channel: str, thread_ts: str
+    ) -> tuple[int, bool, list[asyncio.Future[None]]]:
+        try:
+            if self._stopping or not self._marks.is_thread_watched(channel, thread_ts):
+                return 0, False, []
+            wm = self._marks.thread_watermark(channel, thread_ts)
+            res = await fetch_thread_replies(
+                self.core, ThreadWatermark(channel, thread_ts, wm), self._max_pages_per_channel
+            )
+            if res.failure:
+                self._logger.warn(
+                    {"channel": channel, "threadTs": thread_ts, "reason": res.failure},
+                    "watched thread fetch incomplete; retried by the next recovery",
+                )
+            frames = list(res.frames)
+            frames.sort(key=functools.cmp_to_key(lambda a, b: compare_ts(str(a.get("ts")), str(b.get("ts")))))
+            drafts: list[Draft] = []
+            for frame in frames:
+                draft = normalize_frame(frame, self._normalize_context("backfill"))
+                if draft is not None:
+                    drafts.append(draft)
+            await self._hydrator.preload(drafts, self._backfill_budget)
+            loop = asyncio.get_running_loop()
+            handled: list[asyncio.Future[None]] = []
+            recovered = 0
+            for draft in drafts:
+                self._thread_only.add(id(draft))
+                done: asyncio.Future[None] = loop.create_future()
+                self._done_futures[id(draft)] = done
+                if self._dispatch(draft, "backfill"):
+                    recovered += 1
+                    handled.append(done)
+                    continue
+                self._done_futures.pop(id(draft), None)
+                self._thread_only.discard(id(draft))
+                # Already delivered (e.g. in realtime before the thread was watched): it still counts
+                # towards the thread watermark, so it is not fetched again once the de-dup cache expires.
+                if draft.created_ts and draft.channel_id and self._seen.has(draft.event.event_id):
+                    self._marks.begin(draft.channel_id, draft.created_ts, thread_ts, True)
+                    self._marks.complete(draft.channel_id, draft.created_ts, thread_ts, True)
+            if not res.failure:
+                self._marks.unpin_thread(channel, thread_ts)
+            return recovered, res.failure is None, handled
+        except Exception as err:
+            self._logger.warn(
+                {"err": str(err), "channel": channel, "threadTs": thread_ts}, "watched thread fetch failed"
+            )
+            return 0, False, []
+
+    def _note_thread_replied(self, evt: MessageThreadMetaUpdatedEvent) -> None:
+        """Slack may not push replies of threads the user is not subscribed to.
+
+        It still pushes the parent's ``message_replied``; if the announced reply does not arrive
+        within the grace period, fetch the thread from its watermark.
+        """
+        channel = evt.channel.id
+        thread_ts = evt.thread_root_ts
+        latest = evt.latest_reply_ts
+        if not is_ts(latest) or not self._marks.is_explicitly_watched(channel, thread_ts):
+            return
+        if compare_ts(latest, self._marks.thread_watermark(channel, thread_ts)) <= 0:
+            return
+        if self._seen.has(f"{channel}:{latest}:created"):
+            return
+        key = f"{channel}:{thread_ts}"
+        pending = self._reply_fallbacks.get(key)
+        if pending is not None:
+            if compare_ts(latest, pending[1]) > 0:
+                self._reply_fallbacks[key] = (pending[0], latest)
+            return
+
+        def fire() -> None:
+            entry = self._reply_fallbacks.pop(key, None)
+            if entry is None or self._stopping or not self._marks.is_explicitly_watched(channel, thread_ts):
+                return
+            newest = entry[1]
+            if self._seen.has(f"{channel}:{newest}:created"):
+                return
+            if compare_ts(newest, self._marks.thread_watermark(channel, thread_ts)) <= 0:
+                return
+            self._fetch_watched_thread(channel, thread_ts)
+
+        timer = asyncio.get_running_loop().call_later(self._thread_reply_grace, fire)
+        self._reply_fallbacks[key] = (timer, latest)
+
+    def _cancel_reply_fallback(self, key: str) -> None:
+        entry = self._reply_fallbacks.pop(key, None)
+        if entry is not None:
+            entry[0].cancel()
 
     # -------------------------------------------------------------------------------------------
     # connection lifecycle
