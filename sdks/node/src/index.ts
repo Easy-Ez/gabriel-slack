@@ -32,7 +32,9 @@ export type {
   SearchPage,
   ThreadContext,
   ThreadMessage,
+  ThreadWatchResult,
   UploadOptions,
+  WatchedThread,
 } from "./client/apis.js";
 export { ScopedClient } from "./client/scope.js";
 export type { ScopePolicy, ScopedWriteAction } from "./client/scope.js";

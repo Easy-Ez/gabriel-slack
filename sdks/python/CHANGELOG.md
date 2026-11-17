@@ -6,6 +6,33 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-17
+
+### Added
+- `threads.watch(channel, thread_ts, after=None)`: watch a thread **locally only**. Unlike
+  `threads.subscribe()` it sends no write request (no `subscriptions.*`, no mark, no message), so
+  the user's Threads view and notifications stay untouched. The thread joins the recovery list,
+  persisted in the state store, so its replies are fetched after reconnects and restarts. Replies
+  after `after` (default: the root; the watermark only ever moves forward) are fetched right away
+  and delivered as `MessageCreatedEvent` with `delivery="backfill"`, de-duplicated against realtime
+  events; the call returns `ThreadWatchResult(recovered, complete)` once their handlers finished.
+  Fetch failures return `complete=False` instead of raising.
+- `threads.unwatch(channel, thread_ts)` and `threads.watched()` (`WatchedThread` list with
+  watermarks).
+- When `message.thread_meta_updated` announces a reply of a watched thread that does not arrive in
+  realtime within `RecoveryOptions.thread_reply_grace` (default 2.0 s), the thread is fetched from
+  its watermark. Covers Slack not pushing replies of threads the user is not subscribed to.
+- `RecoveryOptions.max_explicit_thread_watches` (default 500): bound of the local watch list,
+  separate from `watched_threads_limit`; exceeding it raises `SUBSCRIPTION_CAP_EXCEEDED`. Watched
+  threads are never evicted by the activity LRU.
+
+### Changed
+- Thread replies fetched directly from a thread (`threads.watch()` and its fallback) move only
+  that thread's watermark, never a channel's.
+- `threads.subscribe()` / `unsubscribe()` are documented as writing Slack's subscription state.
+  Unsubscribing no longer drops the recovery watermark of a thread that is also watched with
+  `threads.watch()`.
+
 ## [0.7.0] - 2026-11-13
 
 ### Changed

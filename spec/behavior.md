@@ -204,7 +204,7 @@ Each preview becomes `{ url, serviceName?, title?, text? }`, in attachment order
 * A `message_changed` whose only change is a new or updated preview still produces
   `message.updated`, with `currentMarkdown` equal to the previous body and the preview in
   `currentLinkPreviews`.
-* History, thread, activity and search messages carry `linkPreviews` by the same rules (§10.1).
+* History, thread, activity and search messages carry `linkPreviews` by the same rules (§10.2).
 * `toLLMContext()` lists previews in their own section inside the untrusted envelope, marked as
   generated automatically and not written by the sender (§11).
 
@@ -334,7 +334,55 @@ default and is a self-declared display hint: any client can write the same block
 * Fast reconnect: become ready immediately, then reconcile once after **2 s** the same way.
 * `connection.gap.recovered === false` lists every unrecovered range with a reason.
 
-### 10.1 Reading past messages
+### 10.1 Watched threads
+
+A thread's replies are recovered directly (`conversations.replies`) only while the thread is
+watched. Two independent lists feed it; a thread on both is fetched once, with one watermark.
+
+* **Activity list** (bounded LRU, `watchedThreadsLimit`, default **100**): threads this client
+  wrote in, and threads passed to `threads.subscribe()`. The least recently used thread is evicted
+  when the list is full. `threads.subscribe()` / `unsubscribe()` also **write Slack state**
+  (`subscriptions.thread.add` / `remove`): they change the user's Threads view and notifications.
+* **Explicit list** (`threads.watch()` / `unwatch()`): local only. Never evicted by the LRU;
+  bounded by `maxExplicitThreadWatches` (default **500**). Adding a new thread beyond the bound
+  MUST fail with `SUBSCRIPTION_CAP_EXCEEDED` before any request is sent; watching an already
+  watched thread is always allowed.
+
+`threads.watch({ channel, threadTs, after? })`:
+
+* Sends **no write request**: no `subscriptions.*`, no mark, no message. Invalid `channel` /
+  `threadTs` / `after` fail with `INVALID_ARGUMENT`; a client that is not running (before
+  `start()`, after `stop()`) fails with `INVALID_STATE`.
+* The thread's watermark becomes the newer of its current watermark and `after` (default
+  `threadTs`); it never moves back. Repeated calls are idempotent apart from that.
+* The explicit list and the watermark are persisted in the state store before the call
+  resolves; after a restart with the same store the thread takes part in cold-reconnect recovery
+  and `connection.gap` like any watched thread.
+* Immediately fetches `conversations.replies(oldest = watermark, inclusive = false)` (bounded
+  pages, as for recovery) and delivers the replies like recovered messages: names looked up
+  together, origin classified, `delivery: "backfill"`, timestamp order, de-duplicated by
+  `eventId` against realtime and earlier deliveries, ordered per (channel, thread). Fetches for
+  the same thread run one after another. Replies fetched this way move only the thread's
+  watermark, never the channel's; replies already delivered (e.g. in realtime before the thread
+  was watched) still count towards it.
+* Resolves `{ recovered, complete }` once the handlers of every delivered event have finished
+  (`recovered` = events delivered by this call, duplicates excluded). Called from inside an event
+  handler it resolves once the events are queued, since waiting there could block the handler's
+  own executor lane. Network or API failures and the page limit never throw: they resolve with
+  `complete: false`, and the thread stays watched so the next recovery retries.
+
+`threads.unwatch({ channel, threadTs })` removes the thread from the explicit list and its stored
+watermark (unless the activity list still holds it); it calls nothing on Slack.
+`threads.watched()` returns the explicit list with each thread's current watermark.
+
+Slack may not push replies of threads the user is not subscribed to, but still pushes the parent's
+`message_replied`. When `message.thread_meta_updated` arrives for an explicitly watched thread
+with a `latestReplyTs` newer than the thread's watermark, and the `message.created` of that
+reply has not been delivered within a grace period (`threadReplyGraceMs`, default **2 s**), the SDK
+fetches the thread from its watermark exactly as `watch()` does. The `message.thread_meta_updated`
+event itself is emitted as usual.
+
+### 10.2 Reading past messages
 
 Besides history and thread replies, the SDK reads three client endpoints. None of them marks
 anything read, opens or closes a conversation, or writes in any other way.

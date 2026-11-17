@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, overload
@@ -203,18 +203,43 @@ def format_transcript(channel: ChannelRef, root_ts: str, messages: list[ThreadMe
     return "\n".join(lines).rstrip()
 
 
+@dataclass(kw_only=True, slots=True)
+class ThreadWatchResult:
+    """Result of :meth:`ThreadsApi.watch`."""
+
+    #: Replies delivered as ``message.created`` (``delivery="backfill"``) by this call, duplicates excluded.
+    recovered: int
+    #: False when the fetch failed or hit the page limit; the thread stays watched and is retried later.
+    complete: bool
+
+
+@dataclass(kw_only=True, slots=True)
+class WatchedThread:
+    """An explicitly watched thread and its recovery watermark."""
+
+    channel: str
+    thread_ts: str
+    watermark: str
+
+
+@dataclass(kw_only=True, slots=True)
+class ThreadWatchHooks:
+    """Hooks into the client's recovery state (watermarks, local watch lists, backfill delivery)."""
+
+    #: Activity list (LRU) used by subscribe() / unsubscribe().
+    note_subscribed: Callable[[str, str], None]
+    note_unsubscribed: Callable[[str, str], None]
+    #: Explicit, local-only list.
+    watch: Callable[[str, str, str | None], Awaitable[ThreadWatchResult]]
+    unwatch: Callable[[str, str], None]
+    watched: Callable[[], list[WatchedThread]]
+
+
 class ThreadsApi:
-    def __init__(
-        self,
-        core: GabrielCore,
-        h: Hydrator,
-        on_watch: Callable[[str, str], None],
-        on_unwatch: Callable[[str, str], None],
-    ) -> None:
+    def __init__(self, core: GabrielCore, h: Hydrator, hooks: ThreadWatchHooks) -> None:
         self._core = core
         self._h = h
-        self._on_watch = on_watch
-        self._on_unwatch = on_unwatch
+        self._hooks = hooks
 
     async def _page(
         self, channel: str, ts: str, limit: int, cursor: str | None = None, oldest: str | None = None
@@ -327,6 +352,12 @@ class ThreadsApi:
         )
 
     async def subscribe(self, channel: str, thread_ts: str) -> None:
+        """Subscribes the user to the thread **on Slack** (``subscriptions.thread.add``).
+
+        The thread appears in the user's Threads view and notifies them; it is also added to the
+        bounded activity list whose replies are recovered after reconnects. For a local-only watch
+        that changes nothing on Slack, use :meth:`watch`.
+        """
         channel = assert_channel_id(channel)
         thread_ts = assert_ts(thread_ts, "thread_ts")
         await self._core.call_web_api(
@@ -334,9 +365,10 @@ class ThreadsApi:
             {"channel": channel, "thread_ts": thread_ts},
             RequestOpts(reason="thread-subscribe"),
         )
-        self._on_watch(channel, thread_ts)
+        self._hooks.note_subscribed(channel, thread_ts)
 
     async def unsubscribe(self, channel: str, thread_ts: str) -> None:
+        """Unsubscribes the user **on Slack** (``subscriptions.thread.remove``). Does not affect :meth:`watch`."""
         channel = assert_channel_id(channel)
         thread_ts = assert_ts(thread_ts, "thread_ts")
         await self._core.call_web_api(
@@ -344,7 +376,35 @@ class ThreadsApi:
             {"channel": channel, "thread_ts": thread_ts},
             RequestOpts(reason="thread-unsubscribe"),
         )
-        self._on_unwatch(channel, thread_ts)
+        self._hooks.note_unsubscribed(channel, thread_ts)
+
+    async def watch(self, channel: str, thread_ts: str, *, after: str | None = None) -> ThreadWatchResult:
+        """Watches a thread **locally only** (spec/behavior.md §10.1).
+
+        Its replies are recovered after reconnects and restarts (persisted in the state store)
+        without writing anything to Slack: no ``subscriptions.*``, no mark, no message.
+
+        The thread's watermark becomes the newer of its current one and ``after`` (default
+        ``thread_ts``). Replies after the watermark are fetched right away and delivered as
+        ``message.created`` with ``delivery="backfill"``, de-duplicated against realtime events; the
+        call returns once their handlers have finished (from inside a handler: once they are
+        queued). Fetch failures return ``complete=False`` and are retried by the next recovery.
+        Raises only for invalid arguments (``INVALID_ARGUMENT``), a client that is not running
+        (``INVALID_STATE``) or more than ``max_explicit_thread_watches`` threads
+        (``SUBSCRIPTION_CAP_EXCEEDED``).
+        """
+        channel = assert_channel_id(channel)
+        thread_ts = assert_ts(thread_ts, "thread_ts")
+        after_ts = None if after is None else assert_ts(after, "after")
+        return await self._hooks.watch(channel, thread_ts, after_ts)
+
+    def unwatch(self, channel: str, thread_ts: str) -> None:
+        """Stops a local :meth:`watch`. Calls nothing on Slack; idempotent."""
+        self._hooks.unwatch(assert_channel_id(channel), assert_ts(thread_ts, "thread_ts"))
+
+    def watched(self) -> list[WatchedThread]:
+        """Threads watched with :meth:`watch`, with their current recovery watermarks."""
+        return self._hooks.watched()
 
 
 # ---------------------------------------------------------------------------------------------

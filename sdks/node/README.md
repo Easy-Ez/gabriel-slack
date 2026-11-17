@@ -184,7 +184,7 @@ Middleware wraps every handler: `client.use(async (evt, ctx, next) => { …; awa
 | Namespace | Methods |
 | :--- | :--- |
 | `client.chat` | `send({ channel, markdown \| blocks, threadTs?, broadcast?, priority?, preserveUnreadCursor?, autoChunk? })`, `update`, `delete`, `sendTyping`, `createStream` |
-| `client.threads` | `getContext({ channel, threadTs, limit })` → messages, participants, `formattedTranscript`; `iterateReplies`, `markRead`, `subscribe`, `unsubscribe` |
+| `client.threads` | `getContext({ channel, threadTs, limit })` → messages, participants, `formattedTranscript`; `iterateReplies`, `markRead`, `subscribe`, `unsubscribe` (write Slack's subscription state); `watch({ channel, threadTs, after? })`, `unwatch`, `watched()` (local only, see below) |
 | `client.files` | `upload` (3-step, streaming), `downloadStream` / `downloadBuffer` (`maxBytes`, sign-in page detection), `getInfo`, `delete` |
 | `client.search` | `messages`, `files`, `channels`, `people`, `iterateMessages`, `iterateFiles` (highlight markers stripped, de-duplicated) |
 | `client.presence` | `watch(userIds, { trackProfileAndDnd })` / `watchProfiles(userIds)` → handle (`unsubscribe()` / `await using`), `getStatus(userId)` |
@@ -315,6 +315,20 @@ the same block: treat it as a display hint, never as proof of who wrote a messag
   (threads you posted in or subscribed to) are fetched and delivered as `delivery: "backfill"` before
   newer realtime messages, followed by a `connection.gap` report. `recovered: false` lists exactly
   which ranges could not be fetched.
+* **Watching a thread without touching Slack**: `threads.subscribe()` calls
+  `subscriptions.thread.add`, which puts the thread in the user's Threads view and turns on
+  notifications. `threads.watch()` only adds the thread to the local recovery list (persisted in the
+  state store, up to `recovery.maxExplicitThreadWatches`, default 500, never evicted by the 100-thread
+  activity list) and sends no write request. It fetches the replies after `after` (default: the
+  root) right away, delivers them as `delivery: "backfill"` and resolves once their handlers
+  finished. When Slack announces a reply of a watched thread (`message.thread_meta_updated`) without
+  pushing the reply itself within `recovery.threadReplyGraceMs` (2 s), the thread is fetched again.
+
+  ```ts
+  const { recovered, complete } = await client.threads.watch({ channel, threadTs, after: lastSeenTs });
+  // complete === false: the fetch failed; the thread stays watched and is retried on reconnect
+  client.threads.unwatch({ channel, threadTs });
+  ```
 * **State stores**: `MemoryStateStore` (default, nothing survives restarts) and
   `FileStateStore({ dir })` (single host, enables restart backfill). Implement `StateStore` for
   other backends.
@@ -370,7 +384,8 @@ new GabrielClient({
   chat: { globalSendConcurrency: 4, itemDeadlineMs: 30_000, streamUpdatesPerSecond: 2,
           streamMinIntervalMs: 500, interruptedNotice: "\n\n_(interrupted)_" },
   attribution: { icon: ":robot_face:", name: "Paimon", role: "Assistant", review: "unconfirmed" },  // off by default
-  recovery: { maxPagesPerChannel: 10, watchedThreadsLimit: 100, resyncBufferLimit: 10_000 },
+  recovery: { maxPagesPerChannel: 10, watchedThreadsLimit: 100, maxExplicitThreadWatches: 500,
+              threadReplyGraceMs: 2_000, resyncBufferLimit: 10_000 },
   stateStore: new FileStateStore({ dir: "/var/lib/my-agent/gabriel" }),
   logger: consoleLogger("info"),        // any pino-style { debug, info, warn, error }(obj, msg)
   metrics: { increment(name, labels) {}, observe(name, value, labels) {} },

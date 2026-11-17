@@ -7,14 +7,14 @@ import type { WsState } from "../core/ws.js";
 import { GabrielError, cancelledError } from "../errors.js";
 import { badgeSnapshotKey, normalizeFrame, type Draft } from "../events/normalize.js";
 import { validateAttribution, type DefaultAttribution } from "../markdown/attribution.js";
-import type { GabrielEvent, GabrielEventMap, GabrielEventType, MessageCreatedEvent, UnreadBadgeCountsEvent } from "../events/types.js";
+import type { GabrielEvent, GabrielEventMap, GabrielEventType, MessageCreatedEvent, MessageThreadMetaUpdatedEvent, UnreadBadgeCountsEvent } from "../events/types.js";
 import { MemoryStateStore, type StateStore } from "../state/store.js";
 import { withTimeout } from "../util/async.js";
 import type { Logger } from "../util/logger.js";
 import { silentLogger } from "../util/logger.js";
 import { LruCache } from "../util/lru.js";
-import { compareTs, isSubteamId } from "../util/validate.js";
-import { ActivityApi, ChannelsApi, FilesApi, ReactionsApi, SearchApi, ThreadsApi, UsersApi } from "./apis.js";
+import { compareTs, isSubteamId, isTs } from "../util/validate.js";
+import { ActivityApi, ChannelsApi, FilesApi, ReactionsApi, SearchApi, ThreadsApi, UsersApi, type ThreadWatchResult } from "./apis.js";
 import { ChatApi, type ChatSchedulerOptions, type CreateStreamOptions, type SendOptions, type SendResult } from "./chat.js";
 import {
   WaitRegistry,
@@ -33,7 +33,7 @@ import { Hydrator, type HydrationResult } from "./hydrator.js";
 import { attachLLMContext } from "./llm-context.js";
 import { LoopBreaker, SelfRegistry } from "./origin.js";
 import { PresenceApi } from "./presence.js";
-import { WatermarkTracker, recoverGap } from "./recovery.js";
+import { WatermarkTracker, fetchThreadReplies, recoverGap } from "./recovery.js";
 import { ScopedClient, type ScopePolicy } from "./scope.js";
 import type { StreamController } from "./stream.js";
 import { UnreadCursorGuard } from "./unread.js";
@@ -75,8 +75,15 @@ export interface LoopGuardOptions {
 export interface RecoveryOptions {
   /** History pages fetched per channel during gap recovery (default 10). */
   maxPagesPerChannel?: number;
-  /** Threads whose replies are recovered directly (LRU, default 100). */
+  /** Threads written in or subscribed to whose replies are recovered directly (LRU, default 100). */
   watchedThreadsLimit?: number;
+  /** Threads that can be watched with `threads.watch()` at once (default 500); never evicted. */
+  maxExplicitThreadWatches?: number;
+  /**
+   * How long a `message_replied` of an explicitly watched thread waits for the reply itself to
+   * arrive in realtime before the thread is fetched (default 2000ms).
+   */
+  threadReplyGraceMs?: number;
   /** Max realtime frames buffered while resyncing (default 10000). */
   resyncBufferLimit?: number;
 }
@@ -179,6 +186,7 @@ export class GabrielClient {
     includeSelfMessages: boolean;
     maxPagesPerChannel: number;
     resyncBufferLimit: number;
+    threadReplyGraceMs: number;
   };
   private inflightEvents = 0;
   private helloEpoch = 0;
@@ -192,6 +200,15 @@ export class GabrielClient {
   private readyWaiters: Array<{ resolve: () => void; reject: (e: unknown) => void }> = [];
   private reconcileTimer: NodeJS.Timeout | undefined;
   private readonly preloadUsergroups: boolean;
+  /** Called once a tracked (backfilled) draft is fully handled, dropped or abandoned. */
+  private readonly doneCallbacks = new WeakMap<Draft, () => void>();
+  /** Drafts fetched directly from a thread: they move only the thread watermark. */
+  private readonly threadOnlyDrafts = new WeakSet<Draft>();
+  /** "channel:threadTs" → tail of the serialized fetches of that thread. */
+  private readonly threadFetches = new Map<string, Promise<unknown>>();
+  /** "channel:threadTs" → pending `message_replied` fallback (newest reply announced). */
+  private readonly replyFallbacks = new Map<string, { timer: NodeJS.Timeout; latestTs: string }>();
+  private marksLoaded = false;
 
   /** Recommended entry point: only the session cookie is required. */
   static fromCookie(opts: AuthOptions & Omit<GabrielClientOptions, "auth">): GabrielClient {
@@ -231,6 +248,7 @@ export class GabrielClient {
       includeSelfMessages: options.loopGuard?.includeSelfMessages ?? false,
       maxPagesPerChannel: options.recovery?.maxPagesPerChannel ?? 10,
       resyncBufferLimit: options.recovery?.resyncBufferLimit ?? 10_000,
+      threadReplyGraceMs: options.recovery?.threadReplyGraceMs ?? 2_000,
     };
     this.preloadUsergroups = options.hydration?.preloadUsergroups ?? true;
     this.executor = new KeyedExecutor<Routed>({
@@ -241,7 +259,13 @@ export class GabrielClient {
     this.hydrator = new Hydrator(this.core, this.logger);
     this.registry = new SelfRegistry(() => this.core.session.userId);
     this.loopBreaker = new LoopBreaker(options.loopGuard?.maxAutoRepliesPerMinute ?? 5);
-    this.marks = new WatermarkTracker(this.store, () => this.core.session.teamId, options.recovery?.watchedThreadsLimit ?? 100, this.logger);
+    this.marks = new WatermarkTracker(
+      this.store,
+      () => this.core.session.teamId,
+      options.recovery?.watchedThreadsLimit ?? 100,
+      this.logger,
+      options.recovery?.maxExplicitThreadWatches ?? 500,
+    );
     this.unread = new UnreadCursorGuard(this.core, this.registry, this.logger);
     this.chat = new ChatApi(
       this.core,
@@ -256,12 +280,16 @@ export class GabrielClient {
       options.chat,
       options.attribution,
     );
-    this.threads = new ThreadsApi(
-      this.core,
-      this.hydrator,
-      (ch, ts) => this.marks.watchThread(ch, ts),
-      (ch, ts) => this.marks.unwatchThread(ch, ts),
-    );
+    this.threads = new ThreadsApi(this.core, this.hydrator, {
+      noteSubscribed: (ch, ts) => this.marks.watchThread(ch, ts),
+      noteUnsubscribed: (ch, ts) => this.marks.unwatchThread(ch, ts),
+      watch: (ch, ts, after) => this.watchThreadLocally(ch, ts, after),
+      unwatch: (ch, ts) => {
+        this.marks.unwatchExplicit(ch, ts);
+        this.cancelReplyFallback(`${ch}:${ts}`);
+      },
+      watched: () => this.marks.explicitWatches(),
+    });
     this.files = new FilesApi(this.core, this.hydrator, (id) => this.registry.registerClientMsgId(id));
     this.search = new SearchApi(this.core, this.hydrator);
     this.reactions = new ReactionsApi(this.core);
@@ -319,6 +347,7 @@ export class GabrielClient {
       throw err;
     }
     await this.marks.load();
+    this.marksLoaded = true;
     if (this.preloadUsergroups) {
       await withTimeout(this.hydrator.preloadUsergroups(session.userId), 5_000, () => undefined).catch(() => {});
     }
@@ -341,6 +370,7 @@ export class GabrielClient {
     this.stopping = true;
     const drainMs = opts.drainMs ?? 10_000;
     clearTimeout(this.reconcileTimer);
+    for (const key of [...this.replyFallbacks.keys()]) this.cancelReplyFallback(key);
     // Events still hydrating are dropped by route() (and pinned so a later recovery refetches them).
     await withTimeout(Promise.allSettled([...this.lanes.values()]), Math.max(1_000, drainMs), () => undefined).catch(() => {});
     try {
@@ -357,6 +387,7 @@ export class GabrielClient {
     this.core.disconnect();
     for (const q of this.pullQueues) (q as unknown as { close(): void }).close?.();
     this.started = false;
+    this.marksLoaded = false;
   }
 
   health(): HealthReport {
@@ -507,6 +538,7 @@ export class GabrielClient {
       if (key === this.lastBadgeKey) return;
       this.lastBadgeKey = key;
     }
+    if (draft.event.type === "message.thread_meta_updated") this.noteThreadReplied(draft.event);
     this.dispatch(draft, "realtime");
   }
 
@@ -562,25 +594,26 @@ export class GabrielClient {
     return base;
   }
 
-  private dispatch(draft: Draft, delivery: "realtime" | "backfill"): void {
+  /** Returns false when the draft was dropped (duplicate or overflow) instead of being delivered. */
+  private dispatch(draft: Draft, delivery: "realtime" | "backfill"): boolean {
     if (this.resyncBuffer && delivery === "realtime") {
       if (this.resyncBuffer.length >= this.opts.resyncBufferLimit) {
         this.overflow(draft);
-        return;
+        return false;
       }
       this.resyncBuffer.push(draft);
-      return;
+      return true;
     }
     const eventId = draft.event.eventId;
-    if (draft.dedupe && this.seen.has(eventId)) return;
+    if (draft.dedupe && this.seen.has(eventId)) return false;
     if (this.inflightEvents >= this.opts.maxInflightEvents) {
       this.overflow(draft);
-      return;
+      return false;
     }
     if (draft.dedupe) this.seen.set(eventId, true);
     this.inflightEvents++;
     const threadTs = this.threadOfDraft(draft);
-    if (draft.createdTs && draft.channelId) this.marks.begin(draft.channelId, draft.createdTs, threadTs);
+    if (draft.createdTs && draft.channelId) this.marks.begin(draft.channelId, draft.createdTs, threadTs, this.threadOnlyDrafts.has(draft));
     const hydration = this.hydrator.hydrate(draft, this.opts.hydrateBudgetMs);
     const lane = draft.laneKey;
     const prev = this.lanes.get(lane) ?? Promise.resolve();
@@ -595,6 +628,14 @@ export class GabrielClient {
     void next.then(() => {
       if (this.lanes.get(lane) === next) this.lanes.delete(lane);
     });
+    return true;
+  }
+
+  private settle(draft: Draft): void {
+    const done = this.doneCallbacks.get(draft);
+    if (!done) return;
+    this.doneCallbacks.delete(draft);
+    done();
   }
 
   private threadOfDraft(draft: Draft): string | undefined {
@@ -604,8 +645,9 @@ export class GabrielClient {
 
   private overflow(draft: Draft): void {
     this.metrics.increment("events_dropped_total", { type: draft.event.type });
-    if (draft.createdTs && draft.channelId) this.marks.pin(draft.channelId, draft.createdTs, this.threadOfDraft(draft));
+    if (draft.createdTs && draft.channelId) this.marks.pin(draft.channelId, draft.createdTs, this.threadOfDraft(draft), this.threadOnlyDrafts.has(draft));
     this.seen.delete(draft.event.eventId);
+    this.settle(draft);
     this.emitGuard({
       type: "guard.overflow",
       eventId: this.syntheticId("guard.overflow"),
@@ -618,15 +660,17 @@ export class GabrielClient {
     if (this.completed.has(draft)) return;
     this.completed.add(draft);
     this.inflightEvents = Math.max(0, this.inflightEvents - 1);
-    if (draft.createdTs && draft.channelId) this.marks.complete(draft.channelId, draft.createdTs, this.threadOfDraft(draft));
+    if (draft.createdTs && draft.channelId) this.marks.complete(draft.channelId, draft.createdTs, this.threadOfDraft(draft), this.threadOnlyDrafts.has(draft));
+    this.settle(draft);
   }
 
   private route(draft: Draft, hydration: HydrationResult): void {
     const evt = draft.event;
     if (this.stopping && !evt.type.startsWith("auth.") && !evt.type.startsWith("connection.")) {
-      if (draft.createdTs && draft.channelId) this.marks.pin(draft.channelId, draft.createdTs, this.threadOfDraft(draft));
+      if (draft.createdTs && draft.channelId) this.marks.pin(draft.channelId, draft.createdTs, this.threadOfDraft(draft), this.threadOnlyDrafts.has(draft));
       this.completed.add(draft);
       this.inflightEvents = Math.max(0, this.inflightEvents - 1);
+      this.settle(draft);
       return;
     }
     hydration.refresh(); // names that arrived while the event waited for its lane
@@ -927,6 +971,111 @@ export class GabrielClient {
       replyCountInWindow: count,
     });
     throw new GabrielError("LOOP_DETECTED", `auto-reply circuit open for ${channel}${threadTs ? `/${threadTs}` : ""} (${count} writes in 60s)`);
+  }
+
+  // -------------------------------------------------------------------------------------------
+  // local thread watches (spec/behavior.md §10.1)
+
+  private async watchThreadLocally(channel: string, threadTs: string, after: string | undefined): Promise<ThreadWatchResult> {
+    if (!this.marksLoaded || this.stopping) throw new GabrielError("INVALID_STATE", "threads.watch() needs a started client");
+    this.marks.watchExplicit(channel, threadTs, after);
+    await this.marks.flush().catch((err) => this.logger.warn({ err: String(err) }, "watermark flush failed"));
+    const res = await this.fetchWatchedThread(channel, threadTs);
+    // Inside a handler, waiting could block on the handler's own executor lane.
+    if (!currentTrigger()) await res.handled;
+    return { recovered: res.recovered, complete: res.complete };
+  }
+
+  /**
+   * Fetches a watched thread from its watermark and delivers the replies as backfill. Fetches of
+   * one thread are serialized; waiting for their handlers is not (`handled`), so a handler may
+   * trigger another fetch of its own thread. Never throws.
+   */
+  private fetchWatchedThread(channel: string, threadTs: string): Promise<{ recovered: number; complete: boolean; handled: Promise<unknown> }> {
+    const key = `${channel}:${threadTs}`;
+    const prev = this.threadFetches.get(key) ?? Promise.resolve();
+    const run = prev.then(() => this.deliverThreadReplies(channel, threadTs));
+    this.threadFetches.set(key, run);
+    void run.finally(() => {
+      if (this.threadFetches.get(key) === run) this.threadFetches.delete(key);
+    });
+    return run;
+  }
+
+  private async deliverThreadReplies(channel: string, threadTs: string): Promise<{ recovered: number; complete: boolean; handled: Promise<unknown> }> {
+    try {
+      if (this.stopping || !this.marks.isThreadWatched(channel, threadTs)) return { recovered: 0, complete: false, handled: Promise.resolve() };
+      const wm = this.marks.threadWatermark(channel, threadTs);
+      const { frames, failure } = await fetchThreadReplies(this.core, { channel, threadTs, wm }, this.opts.maxPagesPerChannel);
+      if (failure) this.logger.warn({ channel, threadTs, reason: failure }, "watched thread fetch incomplete; retried by the next recovery");
+      frames.sort((a, b) => compareTs(String(a.ts), String(b.ts)));
+      const drafts: Draft[] = [];
+      for (const frame of frames) {
+        const draft = normalizeFrame(frame, this.normalizeContext("backfill"));
+        if (draft) drafts.push(draft);
+      }
+      await this.hydrator.preload(drafts, this.opts.backfillBudgetMs);
+      const handled: Array<Promise<void>> = [];
+      let recovered = 0;
+      for (const draft of drafts) {
+        this.threadOnlyDrafts.add(draft);
+        const done = new Promise<void>((resolve) => this.doneCallbacks.set(draft, resolve));
+        if (this.dispatch(draft, "backfill")) {
+          recovered++;
+          handled.push(done);
+          continue;
+        }
+        this.doneCallbacks.delete(draft);
+        // Already delivered (e.g. in realtime before the thread was watched): it still counts
+        // towards the thread watermark, so it is not fetched again once the de-dup cache expires.
+        if (draft.createdTs && draft.channelId && this.seen.has(draft.event.eventId)) {
+          this.marks.begin(draft.channelId, draft.createdTs, threadTs, true);
+          this.marks.complete(draft.channelId, draft.createdTs, threadTs, true);
+        }
+      }
+      if (!failure) this.marks.unpinThread(channel, threadTs);
+      return { recovered, complete: !failure, handled: Promise.all(handled) };
+    } catch (err) {
+      this.logger.warn({ err: String(err), channel, threadTs }, "watched thread fetch failed");
+      return { recovered: 0, complete: false, handled: Promise.resolve() };
+    }
+  }
+
+  /**
+   * Slack may not push replies of threads the user is not subscribed to, but still pushes the
+   * parent's `message_replied`. If the announced reply does not arrive within the grace period,
+   * fetch the thread from its watermark.
+   */
+  private noteThreadReplied(evt: MessageThreadMetaUpdatedEvent): void {
+    const channel = evt.channel.id;
+    const threadTs = evt.threadRootTs;
+    const latest = evt.latestReplyTs;
+    if (!isTs(latest) || !this.marks.isExplicitlyWatched(channel, threadTs)) return;
+    if (compareTs(latest, this.marks.threadWatermark(channel, threadTs)) <= 0) return;
+    if (this.seen.has(`${channel}:${latest}:created`)) return;
+    const key = `${channel}:${threadTs}`;
+    const pending = this.replyFallbacks.get(key);
+    if (pending) {
+      if (compareTs(latest, pending.latestTs) > 0) pending.latestTs = latest;
+      return;
+    }
+    const timer = setTimeout(() => {
+      const entry = this.replyFallbacks.get(key);
+      this.replyFallbacks.delete(key);
+      if (!entry || this.stopping || !this.marks.isExplicitlyWatched(channel, threadTs)) return;
+      if (this.seen.has(`${channel}:${entry.latestTs}:created`)) return;
+      if (compareTs(entry.latestTs, this.marks.threadWatermark(channel, threadTs)) <= 0) return;
+      void this.fetchWatchedThread(channel, threadTs);
+    }, this.opts.threadReplyGraceMs);
+    timer.unref?.();
+    this.replyFallbacks.set(key, { timer, latestTs: latest });
+  }
+
+  private cancelReplyFallback(key: string): void {
+    const entry = this.replyFallbacks.get(key);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    this.replyFallbacks.delete(key);
   }
 
   // -------------------------------------------------------------------------------------------
