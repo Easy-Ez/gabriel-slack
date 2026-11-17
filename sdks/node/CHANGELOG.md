@@ -6,8 +6,6 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-11-17
-
 ### Added
 - `threads.watch({ channel, threadTs, after? })`: watch a thread **locally only**. Unlike
   `threads.subscribe()` it sends no write request (no `subscriptions.*`, no mark, no message), so

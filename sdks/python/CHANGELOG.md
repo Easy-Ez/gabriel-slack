@@ -6,8 +6,6 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-11-17
-
 ### Added
 - `threads.watch(channel, thread_ts, after=None)`: watch a thread **locally only**. Unlike
   `threads.subscribe()` it sends no write request (no `subscriptions.*`, no mark, no message), so
