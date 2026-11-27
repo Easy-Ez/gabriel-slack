@@ -6,6 +6,8 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-27
+
 ### Changed
 - `ChatSchedulerOptions.item_deadline` defaults to **75 s** (was 30 s). The deadline covers the
   wait for a send slot and every HTTP attempt; 30 s only fit two of the four 15 s attempts.

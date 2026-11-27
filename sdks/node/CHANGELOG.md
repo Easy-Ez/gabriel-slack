@@ -6,6 +6,8 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-27
+
 ### Changed
 - `chat.itemDeadlineMs` defaults to **75000** (was 30000). The deadline covers the wait for a send
   slot and every HTTP attempt; 30s only fit two of the four 15s attempts.
