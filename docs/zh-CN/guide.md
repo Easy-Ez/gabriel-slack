@@ -333,13 +333,13 @@ await client.chat.send({ channel, markdown: "我自己发的", attribution: fals
 
 ## 9. 错误处理
 
-所有接口失败时抛出 `GabrielError { code, message, retryable, rawSlackError?, retryAfterMs? }`。
+所有接口失败时抛出 `GabrielError { code, message, retryable, rawSlackError?, retryAfterMs?, attempts? }`。
 
 **一句话原则**：`retryable === true` 的错误 SDK 已经替你重试过，抛到你手上说明重试已用尽，**不要再包一层重试**；你只需要处理 `retryable === false` 的错误。
 
 | 错误码 | 什么时候 | 你需要做什么 |
 | :--- | :--- | :--- |
-| `RATE_LIMITED` / `NETWORK_TIMEOUT` / `SOCKET_CLOSED` / `SERVER_ERROR` | 限流、超时、断线、服务端错误（已自动重试） | 通常无需处理 |
+| `RATE_LIMITED` / `NETWORK_TIMEOUT` / `SOCKET_CLOSED` / `SERVER_ERROR` | 限流、超时、断线、服务端错误（已自动重试） | 通常无需处理；排查时看 `attempts` |
 | `AUTH_DEAD` | Cookie 失效 | 告警，重新 `gabriel auth login` |
 | `BROWSER_NOT_FOUND` / `SIGN_IN_TIMEOUT` | `signInWithBrowser()` 找不到 Chrome / 等待登录超时 | 安装 Chrome 或传 `browserPath` / 让用户重试 |
 | `NOT_IN_CHANNEL` / `CHANNEL_NOT_FOUND` / `PERMISSION_DENIED` | 频道不存在、未加入或无权限 | 检查频道 |
@@ -352,6 +352,8 @@ await client.chat.send({ channel, markdown: "我自己发的", attribution: fals
 | `CANCELLED` / `STREAM_CLOSED` | 已取消（包括用户关闭了 `signInWithBrowser()` 的登录窗口）/ 流已结束后继续写 | 正常控制流 / 修正调用顺序 |
 | `INVALID_ARGUMENT` / `INVALID_STATE` | 参数或状态不对（例如浏览器标识过旧） | 按提示修正 |
 | `SLACK_API_ERROR` | 未专门映射的 Slack 错误 | 查看 `rawSlackError` |
+
+HTTP 重试用完，或一条消息超过 `chat.itemDeadlineMs`（默认 75 秒，从排到发送名额前开始算，包含每一次请求）时，错误带 `attempts`：每次请求一项 `{ outcome, durationMs, detail? }`。`outcome` 是 `timeout`（15 秒没回应）、`network`（`detail` 是 `ECONNRESET`、`UND_ERR_CONNECT_TIMEOUT` 这类错误码）、`server_error`、`rate_limited`、`slack_error` 或 `aborted`（截止时间到了，请求还没回来）。错误信息里也有同样的摘要，例如 `chat.postMessage exceeded itemDeadlineMs (75000ms): waited 0.0s for a send slot; 4 attempts: #1 timeout after 15.0s; …`，看它就能分清是网络连不上、Slack 不回应、被限流，还是在排队等发送名额。
 
 ```typescript
 import { GabrielError } from "gabriel-slack";
@@ -388,7 +390,7 @@ new GabrielClient({
                  executorKey: "channel", handlerTimeoutMs: 300_000 },
   hydration: { hydrateBudgetMs: 1_000, backfillBudgetMs: 5_000, preloadUsergroups: true },
   loopGuard: { includeSelfMessages: false, maxAutoRepliesPerMinute: 5 },
-  chat: { globalSendConcurrency: 4, itemDeadlineMs: 30_000, streamUpdatesPerSecond: 2,
+  chat: { globalSendConcurrency: 4, itemDeadlineMs: 75_000, streamUpdatesPerSecond: 2,
           streamMinIntervalMs: 500, interruptedNotice: "\n\n_(已中断)_" },
   recovery: { maxPagesPerChannel: 10, watchedThreadsLimit: 100, maxExplicitThreadWatches: 500,
               threadReplyGraceMs: 2_000, resyncBufferLimit: 10_000 },

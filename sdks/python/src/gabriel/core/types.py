@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from ..errors import RequestAttempt
 from ..util.aio import AbortSignal
 
 #: An unmodified downstream WebSocket frame (decoded JSON object).
@@ -25,6 +26,9 @@ class RequestOpts:
     retry: RetryPolicy | None = None
     #: Value for the ``_x_reason`` telemetry field.
     reason: str | None = None
+    #: Receives every failed HTTP attempt as it happens, so a caller that aborts the request
+    #: (a deadline) can still say what the attempts ran into.
+    attempts: list[RequestAttempt] | None = None
 
 
 class WebSocketLike(Protocol):

@@ -43,10 +43,23 @@ const RETRYABLE: ReadonlySet<GabrielErrorCode> = new Set<GabrielErrorCode>([
   "TOKEN_EXPIRED",
 ]);
 
+/** How one HTTP attempt of a request ended. */
+export type AttemptOutcome = "timeout" | "network" | "server_error" | "rate_limited" | "slack_error" | "aborted";
+
+/** One HTTP attempt that did not succeed. Never holds a URL, host or credential. */
+export interface RequestAttempt {
+  outcome: AttemptOutcome;
+  /** From sending the request to the failure. */
+  durationMs: number;
+  /** Transport error code (`ECONNRESET`, `UND_ERR_CONNECT_TIMEOUT`), `HTTP 503`, or the Slack error string. */
+  detail?: string;
+}
+
 export interface GabrielErrorOptions {
   rawSlackError?: string;
   retryAfterMs?: number;
   cause?: unknown;
+  attempts?: readonly RequestAttempt[];
 }
 
 export class GabrielError extends Error {
@@ -56,6 +69,8 @@ export class GabrielError extends Error {
   readonly rawSlackError?: string;
   /** Suggested cool-down when rate limited. */
   readonly retryAfterMs?: number;
+  /** The failed HTTP attempts behind a transport error or a missed send deadline, oldest first. */
+  readonly attempts?: readonly RequestAttempt[];
 
   constructor(code: GabrielErrorCode, message: string, opts: GabrielErrorOptions = {}) {
     super(message, opts.cause === undefined ? undefined : { cause: opts.cause });
@@ -64,7 +79,35 @@ export class GabrielError extends Error {
     this.retryable = RETRYABLE.has(code);
     if (opts.rawSlackError !== undefined) this.rawSlackError = opts.rawSlackError;
     if (opts.retryAfterMs !== undefined) this.retryAfterMs = opts.retryAfterMs;
+    if (opts.attempts !== undefined) this.attempts = [...opts.attempts];
   }
+}
+
+/** `#1 timeout after 15.0s; #2 network ECONNRESET after 0.3s` — the attempt list for an error message. */
+export function describeAttempts(attempts: readonly RequestAttempt[]): string {
+  if (attempts.length === 0) return "no attempt";
+  const list = attempts
+    .map((a, i) => `#${i + 1} ${a.outcome}${a.detail ? ` ${a.detail}` : ""} after ${(a.durationMs / 1000).toFixed(1)}s`)
+    .join("; ");
+  return `${attempts.length} attempt${attempts.length === 1 ? "" : "s"}: ${list}`;
+}
+
+/**
+ * The most specific error code in a transport error's cause chain (`ECONNRESET`,
+ * `UND_ERR_CONNECT_TIMEOUT`, `ENOTFOUND`), else the innermost error name. Never the message,
+ * which can carry hosts.
+ */
+export function transportDetail(err: unknown): string | undefined {
+  let name: string | undefined;
+  let cur: unknown = err;
+  for (let depth = 0; depth < 5 && cur !== null && typeof cur === "object"; depth++) {
+    const code = (cur as { code?: unknown }).code;
+    if (typeof code === "string" && /^[A-Z][A-Z0-9_]{1,40}$/.test(code)) return code;
+    const n = (cur as { name?: unknown }).name;
+    if (typeof n === "string" && /^[A-Za-z]{1,40}$/.test(n)) name = n;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return name;
 }
 
 export function isGabrielError(err: unknown, code?: GabrielErrorCode): err is GabrielError {

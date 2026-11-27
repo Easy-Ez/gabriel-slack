@@ -262,7 +262,11 @@ Each preview becomes `{ url, serviceName?, title?, text? }`, in attachment order
   preferring blank lines → newlines → word boundaries outside code; code fences are closed
   and reopened, table headers repeated. On a length error, re-split at 0.8×.
 * Same-channel posts are strictly FIFO; a global send semaphore (default 4) reserves one slot
-  for interactive replies. Per-item deadline **30 s**.
+  for interactive replies. Per-item deadline **75 s**, counted from when the post is taken off
+  the channel queue: it covers the wait for a send slot and every HTTP attempt (four 15 s
+  attempts plus back-off fit). A post that misses it fails with `NETWORK_TIMEOUT`, also while
+  still waiting for a slot; the message states the deadline, the slot wait and how each attempt
+  ended, and the error carries the attempt list (§12).
 * `chat.postMessage` is idempotent per `client_msg_id`; a WebSocket echo carrying the same
   `client_msg_id` also confirms the send.
 * `chat.update` / `chat.delete` retry `message_not_found` every **175 ms** up to **10** times,
@@ -436,3 +440,10 @@ written by the sender.
 
 Retryable errors reaching the caller mean automatic retries were exhausted; callers SHOULD NOT
 add another retry layer.
+
+A `NETWORK_TIMEOUT`, `SERVER_ERROR` or `RATE_LIMITED` raised by the HTTP layer after its
+retries, and a send that missed its deadline, carry `attempts`: one entry per HTTP attempt
+with its `outcome` (`timeout`, `network`, `server_error`, `rate_limited`, `slack_error`,
+`aborted`), its duration and a short `detail` — the transport's error code (`ECONNRESET`,
+`UND_ERR_CONNECT_TIMEOUT`, `ConnectTimeout`, …), the HTTP status or the Slack error string,
+never a URL, host or credential. The error message summarizes the same list.

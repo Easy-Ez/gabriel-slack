@@ -327,8 +327,13 @@ it is self-declared by the sender, so treat it as a display hint, never as proof
 
 ## Errors
 
-Every API raises `GabrielError` with `code`, `retryable`, `raw_slack_error` and `retry_after`
-(seconds). Retryable errors were already retried — don't add another retry loop.
+Every API raises `GabrielError` with `code`, `retryable`, `raw_slack_error`, `retry_after`
+(seconds) and `attempts`. Retryable errors were already retried — don't add another retry loop.
+When HTTP retries run out, or a post misses `chat.item_deadline` (default 75 s, covering the wait
+for a send slot and every attempt), `attempts` lists how each try ended — `RequestAttempt(outcome,
+duration, detail)` with outcome `timeout` (detail: `ReadTimeout`, `ConnectTimeout`, …), `network`
+(detail: `ECONNRESET`, `ConnectError`, …), `server_error`, `rate_limited`, `slack_error` or
+`aborted` — and the message summarizes it.
 
 ```python
 from gabriel import GabrielError
@@ -367,7 +372,7 @@ GabrielClient(
                                    max_inflight_events=10_000, executor_key="channel", handler_timeout=300.0),
     hydration=HydrationOptions(hydrate_budget=1.0, backfill_budget=5.0, preload_usergroups=True),
     loop_guard=LoopGuardOptions(include_self_messages=False, max_auto_replies_per_minute=5),
-    chat=ChatSchedulerOptions(global_send_concurrency=4, item_deadline=30.0, stream_updates_per_second=2,
+    chat=ChatSchedulerOptions(global_send_concurrency=4, item_deadline=75.0, stream_updates_per_second=2,
                               stream_min_interval=0.5, interrupted_notice="\n\n_(interrupted)_"),
     attribution={"name": "Paimon", "role": "Assistant"},   # default: None (no attribution line)
     recovery=RecoveryOptions(max_pages_per_channel=10, watched_threads_limit=100, max_explicit_thread_watches=500,

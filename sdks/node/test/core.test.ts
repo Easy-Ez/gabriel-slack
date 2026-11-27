@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { GabrielCore } from "../src/core/core.js";
+import { transportDetail, type GabrielError } from "../src/errors.js";
 import { FIRST_SEQ_ID } from "../src/core/ws.js";
 import { COOKIE, ENDPOINTS, FakeSlack, TEAM, tick, until } from "./harness.js";
 
@@ -76,6 +77,29 @@ describe("auth + http", () => {
     const res = await core.callWebApi("conversations.history", { channel: "C0GENERAL01" });
     expect(res.ok).toBe(true);
     expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+  });
+
+  it("lists every failed attempt once retries are exhausted", async () => {
+    const slack = new FakeSlack();
+    slack.on("conversations.history", () => new Response("oops", { status: 503 }));
+    slack.on("conversations.replies", () => new Promise(() => {}));
+    const core = makeCore(slack);
+    await core.initialize();
+    const busy = (await core.callWebApi("conversations.history", {}).catch((e: unknown) => e)) as GabrielError;
+    expect(busy.code).toBe("SERVER_ERROR");
+    expect(busy.message).toMatch(/^conversations\.history: HTTP 503 \(3 attempts: #1 server_error HTTP 503 after \d+\.\ds; #2 .*; #3 .*\)$/);
+    expect(busy.attempts?.map((a) => a.outcome)).toEqual(["server_error", "server_error", "server_error"]);
+    const slow = (await core.callWebApi("conversations.replies", {}, { timeoutMs: 50 }).catch((e: unknown) => e)) as GabrielError;
+    expect(slow.code).toBe("NETWORK_TIMEOUT");
+    expect(slow.message).toMatch(/^conversations\.replies: request timed out \(3 attempts: #1 timeout after 0\.\ds;/);
+    expect(slow.attempts?.map((a) => [a.outcome, a.detail])).toEqual([["timeout", undefined], ["timeout", undefined], ["timeout", undefined]]);
+  });
+
+  it("reports a transport error code from the cause chain, never its message", () => {
+    const reset = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("connect to your-workspace.slack.com failed"), { code: "ECONNRESET" }) });
+    expect(transportDetail(reset)).toBe("ECONNRESET");
+    expect(transportDetail(Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("x"), { name: "ConnectTimeoutError" }) }))).toBe("ConnectTimeoutError");
+    expect(transportDetail("not an error")).toBeUndefined();
   });
 
   it("does not retry non-idempotent writes on server errors", async () => {

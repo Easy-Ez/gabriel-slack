@@ -116,7 +116,19 @@ export class FakeSlack {
     return s;
   }
 
-  readonly fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  /** Like the real fetch, rejects with the signal's reason once it aborts (handlers may hang). */
+  readonly fetch = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const signal = init?.signal;
+    if (!signal) return this.handle(input, init);
+    if (signal.aborted) return Promise.reject(signal.reason);
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(signal.reason);
+      signal.addEventListener("abort", onAbort, { once: true });
+      this.handle(input, init).then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
+  };
+
+  private readonly handle = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url);
     const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
       new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });

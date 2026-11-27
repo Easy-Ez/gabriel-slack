@@ -51,7 +51,7 @@ export type { FetchLike, MetricsSink, RawMessageFrame, RawWsFrame, RequestOpts, 
 export type { WsState } from "./core/ws.js";
 
 export { GabrielError, isGabrielError } from "./errors.js";
-export type { GabrielErrorCode } from "./errors.js";
+export type { AttemptOutcome, GabrielErrorCode, RequestAttempt } from "./errors.js";
 
 export * from "./events/types.js";
 export { normalizeFrame, laneKeyOf, contentHash } from "./events/normalize.js";

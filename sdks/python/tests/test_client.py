@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import random
 import re
@@ -617,6 +618,44 @@ async def test_retries_message_not_found_within_creation_window(started: Started
     res = await client.chat.send("C0GENERAL01", "x")
     await client.chat.update("C0GENERAL01", res.ts, "y")
     assert len(slack.calls_to("chat.update")) == 3
+
+
+async def test_names_each_attempt_when_a_post_misses_its_deadline(started: Started) -> None:
+    slack = FakeSlack()
+
+    async def post(_f: dict[str, str], n: int) -> Any:
+        if n == 1:
+            raise httpx.ConnectError("fetch failed") from ConnectionResetError(errno.ECONNRESET, "reset")
+        await asyncio.Future()
+
+    slack.on("chat.postMessage", post)
+    _, client = await started(slack, chat=ChatSchedulerOptions(item_deadline=1.5))
+    err = await expect_code(client.chat.send("C0GENERAL01", "x"), "NETWORK_TIMEOUT")
+    assert re.fullmatch(
+        r"chat\.postMessage exceeded item_deadline \(1\.5s\): waited 0\.\ds for a send slot; "
+        r"2 attempts: #1 network ECONNRESET after \d+\.\ds; #2 aborted after \d+\.\ds",
+        str(err),
+    )
+    assert [(a.outcome, a.detail) for a in err.attempts or ()] == [("network", "ECONNRESET"), ("aborted", None)]
+    assert len(slack.calls_to("chat.postMessage")) == 2
+
+
+async def test_deadline_while_waiting_for_a_send_slot_is_a_network_timeout(started: Started) -> None:
+    slack = FakeSlack()
+
+    async def slow_update(f: dict[str, str], _n: int) -> Any:
+        await asyncio.sleep(0.6)
+        return {"ok": True, "ts": f["ts"]}
+
+    slack.on("chat.update", slow_update)
+    _, client = await started(slack, chat=ChatSchedulerOptions(global_send_concurrency=1, item_deadline=0.2))
+    res = await client.chat.send("C0GENERAL01", "x")
+    editing = asyncio.create_task(client.chat.update("C0GENERAL01", res.ts, "y"))
+    await tick(0.02)
+    err = await expect_code(client.chat.send("C0OTHER0001", "z"), "NETWORK_TIMEOUT")
+    assert re.search(r"exceeded item_deadline \(0\.2s\): waited 0\.2s for a send slot and never got one$", str(err))
+    assert err.attempts == ()
+    await editing
 
 
 # --------------------------------------------------------------------------------------- presence

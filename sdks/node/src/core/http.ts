@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { GabrielError, TOKEN_INVALID_ERRORS, cancelledError, fromSlackError } from "../errors.js";
+import { GabrielError, TOKEN_INVALID_ERRORS, cancelledError, describeAttempts, fromSlackError, transportDetail, type AttemptOutcome, type RequestAttempt } from "../errors.js";
 import { anySignal, fullJitterDelay, sleep } from "../util/async.js";
 import type { Logger } from "../util/logger.js";
 import type { AuthManager, WorkspaceSession } from "./auth.js";
@@ -83,6 +83,8 @@ function xId(now: number): string {
  * - default timeouts (Web API 15s, EdgeAPI 10s);
  * - one 429 cool-down bucket per method, shared by every caller;
  * - retries by idempotency class (reads, client_msg_id writes, overwrite writes);
+ * - every failed attempt is recorded (outcome, duration, transport code) and carried by the
+ *   error raised once retries are exhausted;
  * - transparent token refresh + single replay on invalid_auth.
  */
 export class HttpEngine {
@@ -180,6 +182,11 @@ export class HttpEngine {
   ): Promise<T> {
     let attempt = 0;
     let authReplayed = false;
+    const attempts: RequestAttempt[] = opts.attempts ?? [];
+    const record = (outcome: AttemptOutcome, startedAt: number, detail?: string) => {
+      attempts.push({ outcome, durationMs: this.now() - startedAt, ...(detail ? { detail } : {}) });
+    };
+    const summary = () => ` (${describeAttempts(attempts)})`;
     for (;;) {
       if (opts.signal?.aborted) throw cancelledError(opts.signal.reason);
       await this.waitCooldown(bucket, opts.signal);
@@ -194,14 +201,17 @@ export class HttpEngine {
       try {
         resp = await this.deps.fetch(url, { ...init, signal: anySignal(timeoutSignal, opts.signal) });
       } catch (err) {
-        if (opts.signal?.aborted) throw cancelledError(opts.signal.reason);
+        if (opts.signal?.aborted) {
+          record("aborted", started);
+          throw cancelledError(opts.signal.reason);
+        }
         const timedOut = timeoutSignal.aborted;
-        const error = new GabrielError("NETWORK_TIMEOUT", `${label}: ${timedOut ? "request timed out" : "network error"}`, { cause: err });
+        record(timedOut ? "timeout" : "network", started, timedOut ? undefined : transportDetail(err));
         if (safe && attempt < this.maxRetries) {
           await sleep(fullJitterDelay(attempt++, 500, 8_000), opts.signal);
           continue;
         }
-        throw error;
+        throw new GabrielError("NETWORK_TIMEOUT", `${label}: ${timedOut ? "request timed out" : "network error"}${summary()}`, { cause: err, attempts });
       } finally {
         this.deps.metrics.observe("api_request_latency_ms", this.now() - started, { method: label });
       }
@@ -209,6 +219,7 @@ export class HttpEngine {
       if (resp.status === 429) {
         const retryAfterMs = Math.max(1, Number(resp.headers.get("retry-after") ?? "5")) * 1000;
         this.cooldownUntil.set(bucket, this.now() + retryAfterMs);
+        record("rate_limited", started, `retry-after ${retryAfterMs / 1000}s`);
         this.deps.metrics.increment("rate_limited_429_total", { method: label });
         this.deps.logger.warn({ method: label, retryAfterMs }, "rate limited");
         await resp.body?.cancel().catch(() => {});
@@ -216,15 +227,16 @@ export class HttpEngine {
           attempt++;
           continue;
         }
-        throw new GabrielError("RATE_LIMITED", `${label}: rate limited`, { retryAfterMs, rawSlackError: "ratelimited" });
+        throw new GabrielError("RATE_LIMITED", `${label}: rate limited${summary()}`, { retryAfterMs, rawSlackError: "ratelimited", attempts });
       }
       if (resp.status >= 500) {
         await resp.body?.cancel().catch(() => {});
+        record("server_error", started, `HTTP ${resp.status}`);
         if (safe && attempt < this.maxRetries) {
           await sleep(fullJitterDelay(attempt++, 500, 8_000), opts.signal);
           continue;
         }
-        throw new GabrielError("SERVER_ERROR", `${label}: HTTP ${resp.status}`);
+        throw new GabrielError("SERVER_ERROR", `${label}: HTTP ${resp.status}${summary()}`, { attempts });
       }
 
       let body: Record<string, unknown>;
@@ -242,13 +254,18 @@ export class HttpEngine {
         }
         if ((slackError === "ratelimited" || slackError === "rate_limited") && attempt < this.maxRetries) {
           this.cooldownUntil.set(bucket, this.now() + 5_000);
+          record("rate_limited", started, slackError);
           attempt++;
           continue;
         }
         const mapped = fromSlackError(label, slackError);
-        if (mapped.retryable && mapped.code !== "TOKEN_EXPIRED" && safe && attempt < this.maxRetries) {
-          await sleep(fullJitterDelay(attempt++, 500, 8_000), opts.signal);
-          continue;
+        if (mapped.retryable && mapped.code !== "TOKEN_EXPIRED") {
+          record(mapped.code === "RATE_LIMITED" ? "rate_limited" : "slack_error", started, slackError);
+          if (safe && attempt < this.maxRetries) {
+            await sleep(fullJitterDelay(attempt++, 500, 8_000), opts.signal);
+            continue;
+          }
+          if (attempts.length > 1) throw new GabrielError(mapped.code, `${mapped.message}${summary()}`, { rawSlackError: slackError, attempts });
         }
         throw mapped;
       }
