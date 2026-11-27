@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { GabrielClient } from "../src/client/client.js";
+import type { GabrielError } from "../src/errors.js";
 import type { GabrielEvent, MessageCreatedEvent } from "../src/events/types.js";
 import { FakeSlack, SELF, makeClient, messageFrame, tick, until } from "./harness.js";
 
@@ -400,6 +401,37 @@ describe("chat", () => {
     const stream = await client.chat.createStream({ channel: "C0GENERAL01" });
     slack.socket.deliver({ type: "message", subtype: "message_deleted", channel: "C0GENERAL01", deleted_ts: stream.ts, ts: "1800009999.000000" });
     await until(() => stream.signal.aborted);
+  });
+
+  it("says what each attempt ran into when a post misses its deadline", async () => {
+    const slack = new FakeSlack();
+    slack.on("chat.postMessage", (_f, n) => {
+      if (n === 1) throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) });
+      return new Promise(() => {});
+    });
+    const { client } = await started(slack, { chat: { itemDeadlineMs: 1_500 } });
+    const err = (await client.chat.send({ channel: "C0GENERAL01", markdown: "x" }).catch((e: unknown) => e)) as GabrielError;
+    expect(err.code).toBe("NETWORK_TIMEOUT");
+    expect(err.message).toMatch(/^chat\.postMessage exceeded itemDeadlineMs \(1500ms\): waited 0\.\ds for a send slot; 2 attempts: #1 network ECONNRESET after \d+\.\ds; #2 aborted after \d+\.\ds$/);
+    expect(err.attempts?.map((a) => [a.outcome, a.detail])).toEqual([["network", "ECONNRESET"], ["aborted", undefined]]);
+    expect(slack.callsTo("chat.postMessage")).toHaveLength(2);
+  });
+
+  it("fails with NETWORK_TIMEOUT when the deadline passes while waiting for a send slot", async () => {
+    const slack = new FakeSlack();
+    slack.on("chat.update", async (f) => {
+      await tick(600);
+      return { ok: true, ts: f.ts };
+    });
+    const { client } = await started(slack, { chat: { globalSendConcurrency: 1, itemDeadlineMs: 200 } });
+    const { ts } = await client.chat.send({ channel: "C0GENERAL01", markdown: "x" });
+    const editing = client.chat.update({ channel: "C0GENERAL01", ts, markdown: "y" });
+    await tick(20);
+    const err = (await client.chat.send({ channel: "C0OTHER0001", markdown: "z" }).catch((e: unknown) => e)) as GabrielError;
+    expect(err.code).toBe("NETWORK_TIMEOUT");
+    expect(err.message).toMatch(/exceeded itemDeadlineMs \(200ms\): waited 0\.2s for a send slot and never got one$/);
+    expect(err.attempts).toEqual([]);
+    await editing;
   });
 
   it("retries message_not_found within the 2s creation window", async () => {

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
+import re
 import time
 from collections.abc import Callable
 from typing import Any
@@ -17,7 +19,7 @@ from gabriel.core.core import GabrielCore, ProtocolDriftInfo
 from gabriel.core.http import encode_multipart, is_safe_to_retry
 from gabriel.core.types import RequestOpts
 from gabriel.core.ws import FIRST_SEQ_ID, ReconnectingInfo, WsState, WsTimings
-from gabriel.errors import GabrielError
+from gabriel.errors import GabrielError, transport_detail
 from gabriel.util.aio import AbortController
 from harness import COOKIE, ENDPOINTS, SELF, TEAM, TOKEN_1, FakeSlack, FileBody, json_response, tick, until
 
@@ -144,6 +146,40 @@ async def test_does_not_retry_non_idempotent_writes_on_server_errors(slack: Fake
         await core.call_web_api("chat.delete", {"channel": "C0GENERAL01", "ts": "1.1"})
     assert exc.value.code == "SERVER_ERROR"
     assert len(slack.calls_to("chat.delete")) == 1
+
+
+async def test_lists_every_failed_attempt_once_retries_are_exhausted(slack: FakeSlack, make_core: MakeCore) -> None:
+    async def hang(_f: dict[str, str], _n: int) -> Any:
+        await asyncio.Future()
+
+    slack.on("conversations.history", lambda _f, _n: httpx.Response(503, text="busy"))
+    slack.on("conversations.replies", hang)
+    core = make_core(slack)
+    await core.initialize()
+    with pytest.raises(GabrielError) as busy:
+        await core.call_web_api("conversations.history", {})
+    assert busy.value.code == "SERVER_ERROR"
+    assert re.fullmatch(
+        r"conversations\.history: HTTP 503 \(3 attempts: #1 server_error HTTP 503 after \d+\.\ds; #2 .*; #3 .*\)",
+        str(busy.value),
+    )
+    assert [a.outcome for a in busy.value.attempts or ()] == ["server_error"] * 3
+    with pytest.raises(GabrielError) as slow:
+        await core.call_web_api("conversations.replies", {}, RequestOpts(timeout=0.05))
+    assert slow.value.code == "NETWORK_TIMEOUT"
+    assert str(slow.value).startswith("conversations.replies: request timed out (3 attempts: #1 timeout after 0.")
+    assert [a.outcome for a in slow.value.attempts or ()] == ["timeout"] * 3
+
+
+def test_transport_detail_reports_a_code_never_the_message() -> None:
+    try:
+        raise httpx.ConnectError("connect to your-workspace.slack.com failed") from ConnectionResetError(
+            errno.ECONNRESET, "reset"
+        )
+    except httpx.ConnectError as err:
+        assert transport_detail(err) == "ECONNRESET"
+    assert transport_detail(httpx.ConnectTimeout("your-workspace.slack.com")) == "ConnectTimeout"
+    assert transport_detail(ValueError("x")) is None
 
 
 async def test_retries_read_only_methods_on_server_errors(slack: FakeSlack, make_core: MakeCore) -> None:

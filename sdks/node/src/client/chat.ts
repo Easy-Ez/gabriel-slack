@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { GabrielCore } from "../core/core.js";
-import { GabrielError } from "../errors.js";
+import { GabrielError, describeAttempts, type RequestAttempt } from "../errors.js";
 import { contentHash } from "../events/normalize.js";
 import {
   markdownToPlainText,
@@ -63,7 +63,10 @@ export interface CreateStreamOptions {
 export interface ChatSchedulerOptions {
   /** Cross-channel send concurrency; one slot is reserved for `interactive` (default 4). */
   globalSendConcurrency?: number;
-  /** Hard deadline per send task (default 30000). */
+  /**
+   * Hard deadline per posted message (default 75000), from leaving the channel queue: covers
+   * the wait for a send slot and every HTTP attempt (4 × 15s plus back-off).
+   */
   itemDeadlineMs?: number;
   /** Workspace-wide stream refresh rate shared by all streams (default 2/s, burst 4). */
   streamUpdatesPerSecond?: number;
@@ -137,7 +140,7 @@ export class ChatApi {
     this.semaphore = new PrioritySemaphore(opts.globalSendConcurrency ?? 4, 1);
     const rate = opts.streamUpdatesPerSecond ?? 2;
     this.bucket = new TokenBucket(rate, Math.max(1, Math.ceil(rate * 2)));
-    this.itemDeadlineMs = opts.itemDeadlineMs ?? 30_000;
+    this.itemDeadlineMs = opts.itemDeadlineMs ?? 75_000;
     this.streamMinIntervalMs = opts.streamMinIntervalMs ?? 500;
     this.interruptedNotice = opts.interruptedNotice ?? "\n\n_(interrupted)_";
   }
@@ -328,7 +331,22 @@ export class ChatApi {
     this.registry.registerClientMsgId(clientMsgId);
     const deadline = AbortSignal.timeout(this.itemDeadlineMs);
     const combined = anySignal(deadline, signal);
-    const release = await this.semaphore.acquire(priority, combined);
+    const queuedAt = Date.now();
+    const attempts: RequestAttempt[] = [];
+    let queuedMs: number | undefined;
+    const missedDeadline = (cause: unknown) => {
+      const waited = `waited ${((queuedMs ?? Date.now() - queuedAt) / 1000).toFixed(1)}s for a send slot`;
+      const where = queuedMs === undefined ? `${waited} and never got one` : `${waited}; ${describeAttempts(attempts)}`;
+      return new GabrielError("NETWORK_TIMEOUT", `chat.postMessage exceeded itemDeadlineMs (${this.itemDeadlineMs}ms): ${where}`, { cause, attempts });
+    };
+    let release: () => void;
+    try {
+      release = await this.semaphore.acquire(priority, combined);
+    } catch (err) {
+      if (deadline.aborted && !signal?.aborted) throw missedDeadline(err);
+      throw err;
+    }
+    queuedMs = Date.now() - queuedAt;
     try {
       const fields: Record<string, unknown> = {
         channel: msg.channel,
@@ -344,7 +362,7 @@ export class ChatApi {
       }
       let res: { ts?: string; message?: Record<string, unknown> };
       try {
-        res = await this.core.callWebApi("chat.postMessage", fields, { reason: "webapp_message_send", signal: combined });
+        res = await this.core.callWebApi("chat.postMessage", fields, { reason: "webapp_message_send", signal: combined, attempts });
       } catch (err) {
         // Dual-channel confirmation: if the WebSocket already delivered our message, the send succeeded.
         const echoed = this.echoes.get(clientMsgId);
@@ -353,7 +371,7 @@ export class ChatApi {
           this.registry.registerSentTs(echoed);
           return echoed;
         }
-        if (deadline.aborted && !signal?.aborted) throw new GabrielError("NETWORK_TIMEOUT", "chat.postMessage exceeded itemDeadlineMs", { cause: err });
+        if (deadline.aborted && !signal?.aborted) throw missedDeadline(err);
         throw err;
       }
       const ts = res.ts ?? (typeof res.message?.ts === "string" ? res.message.ts : undefined);

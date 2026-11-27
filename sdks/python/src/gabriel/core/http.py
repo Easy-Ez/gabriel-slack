@@ -15,7 +15,16 @@ from urllib.parse import urlencode, urljoin, urlsplit
 
 import httpx
 
-from ..errors import TOKEN_INVALID_ERRORS, GabrielError, cancelled_error, from_slack_error
+from ..errors import (
+    TOKEN_INVALID_ERRORS,
+    AttemptOutcome,
+    GabrielError,
+    RequestAttempt,
+    cancelled_error,
+    describe_attempts,
+    from_slack_error,
+    transport_detail,
+)
 from ..util.aio import AbortSignal, full_jitter_delay, race_signal, sleep
 from ..util.logger import Logger, silent_logger
 from .auth import AuthManager, WorkspaceSession
@@ -177,6 +186,8 @@ class HttpEngine:
     - default timeouts (Web API 15 s, EdgeAPI 10 s);
     - one 429 cool-down bucket per method, shared by every caller;
     - retries by idempotency class (reads, ``client_msg_id`` writes, overwrite writes);
+    - every failed attempt is recorded (outcome, duration, transport error) and carried by the
+      error raised once retries are exhausted;
     - transparent token refresh + single replay on ``invalid_auth``.
     """
 
@@ -327,6 +338,14 @@ class HttpEngine:
         signal = opts.signal
         attempt = 0
         auth_replayed = False
+        attempts: list[RequestAttempt] = opts.attempts if opts.attempts is not None else []
+
+        def record(outcome: AttemptOutcome, started_at: float, detail: str | None = None) -> None:
+            attempts.append(RequestAttempt(outcome, self._now() - started_at, detail))
+
+        def summary() -> str:
+            return f" ({describe_attempts(attempts)})"
+
         while True:
             if signal is not None and signal.aborted:
                 raise cancelled_error(signal.reason)
@@ -341,16 +360,23 @@ class HttpEngine:
                 resp = await race_signal(self._send(built, timeout), signal)
             except Exception as err:
                 if signal is not None and signal.aborted:
+                    record("aborted", started)
                     raise cancelled_error(signal.reason) from err
                 timed_out = isinstance(err, TimeoutError | httpx.TimeoutException)
-                error = GabrielError(
-                    "NETWORK_TIMEOUT", f"{label}: {'request timed out' if timed_out else 'network error'}", cause=err
-                )
+                if timed_out:
+                    record("timeout", started, type(err).__name__ if isinstance(err, httpx.TimeoutException) else None)
+                else:
+                    record("network", started, transport_detail(err))
                 if safe and attempt < self._max_retries:
                     await sleep(full_jitter_delay(attempt, _RETRY_BASE, _RETRY_CAP), signal)
                     attempt += 1
                     continue
-                raise error from err
+                raise GabrielError(
+                    "NETWORK_TIMEOUT",
+                    f"{label}: {'request timed out' if timed_out else 'network error'}{summary()}",
+                    cause=err,
+                    attempts=attempts,
+                ) from err
             finally:
                 self._metrics.observe("api_request_latency_ms", (self._now() - started) * 1000, {"method": label})
 
@@ -361,20 +387,26 @@ class HttpEngine:
                     header = 5.0
                 retry_after = max(1.0, header)
                 self._cooldown_until[bucket] = self._now() + retry_after
+                record("rate_limited", started, f"retry-after {retry_after:g}s")
                 self._metrics.increment("rate_limited_429_total", {"method": label})
                 self._logger.warn({"method": label, "retryAfterMs": int(retry_after * 1000)}, "rate limited")
                 if attempt < self._max_retries:
                     attempt += 1
                     continue
                 raise GabrielError(
-                    "RATE_LIMITED", f"{label}: rate limited", retry_after=retry_after, raw_slack_error="ratelimited"
+                    "RATE_LIMITED",
+                    f"{label}: rate limited{summary()}",
+                    retry_after=retry_after,
+                    raw_slack_error="ratelimited",
+                    attempts=attempts,
                 )
             if resp.status_code >= 500:
+                record("server_error", started, f"HTTP {resp.status_code}")
                 if safe and attempt < self._max_retries:
                     await sleep(full_jitter_delay(attempt, _RETRY_BASE, _RETRY_CAP), signal)
                     attempt += 1
                     continue
-                raise GabrielError("SERVER_ERROR", f"{label}: HTTP {resp.status_code}")
+                raise GabrielError("SERVER_ERROR", f"{label}: HTTP {resp.status_code}{summary()}", attempts=attempts)
 
             try:
                 body: Any = resp.json()
@@ -395,13 +427,20 @@ class HttpEngine:
                     continue
                 if slack_error in ("ratelimited", "rate_limited") and attempt < self._max_retries:
                     self._cooldown_until[bucket] = self._now() + 5.0
+                    record("rate_limited", started, slack_error)
                     attempt += 1
                     continue
                 mapped = from_slack_error(label, slack_error)
-                if mapped.retryable and mapped.code != "TOKEN_EXPIRED" and safe and attempt < self._max_retries:
-                    await sleep(full_jitter_delay(attempt, _RETRY_BASE, _RETRY_CAP), signal)
-                    attempt += 1
-                    continue
+                if mapped.retryable and mapped.code != "TOKEN_EXPIRED":
+                    record("rate_limited" if mapped.code == "RATE_LIMITED" else "slack_error", started, slack_error)
+                    if safe and attempt < self._max_retries:
+                        await sleep(full_jitter_delay(attempt, _RETRY_BASE, _RETRY_CAP), signal)
+                        attempt += 1
+                        continue
+                    if len(attempts) > 1:
+                        raise GabrielError(
+                            mapped.code, f"{mapped}{summary()}", raw_slack_error=slack_error, attempts=attempts
+                        )
                 raise mapped
             if not resp.is_success:
                 raise GabrielError("SLACK_API_ERROR", f"{label}: HTTP {resp.status_code}")

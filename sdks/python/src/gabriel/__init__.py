@@ -45,7 +45,7 @@ from .core.metadata import DEFAULT_CLIENT_METADATA, DEFAULT_ENDPOINTS, ClientMet
 from .core.sign_in import SignInResult, SignInStatus, WorkspaceInfo, list_workspaces, sign_in_with_browser
 from .core.types import MetricsSink, RawWsFrame, RequestOpts, WebSocketFactory, WebSocketLike
 from .core.ws import WsState
-from .errors import GabrielError, GabrielErrorCode, is_gabriel_error
+from .errors import AttemptOutcome, GabrielError, GabrielErrorCode, RequestAttempt, is_gabriel_error
 from .events.normalize import Draft, NormalizeContext, content_hash, lane_key_of, normalize_frame
 from .events.types import *  # noqa: F403
 from .events.types import __all__ as _event_names
@@ -113,6 +113,8 @@ __all__ = [
     "GabrielCore",
     "GabrielError",
     "GabrielErrorCode",
+    "RequestAttempt",
+    "AttemptOutcome",
     "HealthReport",
     "HistoryMessage",
     "ActivityItem",

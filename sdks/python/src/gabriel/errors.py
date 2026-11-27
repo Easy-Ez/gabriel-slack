@@ -7,6 +7,9 @@ exhausted — do not wrap SDK calls in another retry loop.
 
 from __future__ import annotations
 
+import errno
+from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Literal
 
 GabrielErrorCode = Literal[
@@ -51,6 +54,49 @@ _RETRYABLE: frozenset[str] = frozenset(
 )
 
 
+#: How one HTTP attempt of a request ended.
+AttemptOutcome = Literal["timeout", "network", "server_error", "rate_limited", "slack_error", "aborted"]
+
+
+@dataclass(frozen=True, slots=True)
+class RequestAttempt:
+    """One HTTP attempt that did not succeed. Never holds a URL, host or credential."""
+
+    outcome: AttemptOutcome
+    #: Seconds from sending the request to the failure.
+    duration: float
+    #: Transport error (``ECONNRESET``, ``ConnectTimeout``), ``HTTP 503``, or the Slack error string.
+    detail: str | None = None
+
+
+def describe_attempts(attempts: Sequence[RequestAttempt]) -> str:
+    """``2 attempts: #1 timeout ReadTimeout after 15.0s; #2 network ECONNRESET after 0.3s``."""
+    if not attempts:
+        return "no attempt"
+    parts = [
+        f"#{i} {a.outcome}{f' {a.detail}' if a.detail else ''} after {a.duration:.1f}s"
+        for i, a in enumerate(attempts, start=1)
+    ]
+    return f"{len(attempts)} attempt{'' if len(attempts) == 1 else 's'}: {'; '.join(parts)}"
+
+
+def transport_detail(err: BaseException | None) -> str | None:
+    """The errno name in a transport error's cause chain (``ECONNRESET``), else the outermost
+    httpx exception class (``ConnectError``, ``ReadTimeout``). Never the message, which can carry
+    hosts."""
+    name: str | None = None
+    cur: BaseException | None = err
+    for _ in range(5):
+        if cur is None:
+            break
+        if isinstance(cur, OSError) and cur.errno is not None and cur.errno in errno.errorcode:
+            return errno.errorcode[cur.errno]
+        if name is None and type(cur).__module__.startswith(("httpx", "httpcore")):
+            name = type(cur).__name__
+        cur = cur.__cause__ or cur.__context__
+    return name
+
+
 class GabrielError(Exception):
     """The single exception type raised by the SDK.
 
@@ -59,12 +105,15 @@ class GabrielError(Exception):
         retryable: True for transient classes (already retried internally).
         raw_slack_error: Slack's original error string, e.g. ``"channel_not_found"``.
         retry_after: Suggested cool-down in seconds when rate limited.
+        attempts: The failed HTTP attempts behind a transport error or a missed send deadline,
+            oldest first.
     """
 
     code: GabrielErrorCode
     retryable: bool
     raw_slack_error: str | None
     retry_after: float | None
+    attempts: tuple[RequestAttempt, ...] | None
 
     def __init__(
         self,
@@ -74,12 +123,14 @@ class GabrielError(Exception):
         raw_slack_error: str | None = None,
         retry_after: float | None = None,
         cause: BaseException | None = None,
+        attempts: Sequence[RequestAttempt] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = code in _RETRYABLE
         self.raw_slack_error = raw_slack_error
         self.retry_after = retry_after
+        self.attempts = tuple(attempts) if attempts is not None else None
         if cause is not None:
             self.__cause__ = cause
 

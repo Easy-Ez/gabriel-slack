@@ -12,7 +12,7 @@ from types import TracebackType
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
 from ..core.types import RequestOpts
-from ..errors import GabrielError
+from ..errors import GabrielError, RequestAttempt, describe_attempts
 from ..events.normalize import content_hash
 from ..markdown.attribution import (
     AttributionOverride,
@@ -56,8 +56,9 @@ class UpdateResult:
 class ChatSchedulerOptions:
     #: Cross-channel send concurrency; one slot is reserved for ``interactive`` (default 4).
     global_send_concurrency: int = 4
-    #: Hard deadline per send task in seconds (default 30).
-    item_deadline: float = 30.0
+    #: Hard deadline per posted message in seconds (default 75), from leaving the channel queue:
+    #: covers the wait for a send slot and every HTTP attempt (4 × 15 s plus back-off).
+    item_deadline: float = 75.0
     #: Workspace-wide stream refresh rate shared by all streams (default 2/s, burst 4).
     stream_updates_per_second: float = 2.0
     #: Minimum interval between refreshes of one stream in seconds (default 0.5).
@@ -442,12 +443,29 @@ class ChatApi:
         self._registry.register_client_msg_id(client_msg_id)
         deadline = AbortSignal.timeout(self._item_deadline)
         combined = AbortSignal.any(deadline, signal)
+        queued_at = time.monotonic()
+        attempts: list[RequestAttempt] = []
+        queued: float | None = None
+
+        def missed_deadline(cause: BaseException) -> GabrielError:
+            waited = f"waited {queued if queued is not None else time.monotonic() - queued_at:.1f}s for a send slot"
+            where = f"{waited} and never got one" if queued is None else f"{waited}; {describe_attempts(attempts)}"
+            return GabrielError(
+                "NETWORK_TIMEOUT",
+                f"chat.postMessage exceeded item_deadline ({self._item_deadline:g}s): {where}",
+                cause=cause,
+                attempts=attempts,
+            )
+
         try:
             release = await self._semaphore.acquire(priority, combined)
-        except BaseException:
+        except BaseException as err:
             combined.dispose()
             deadline.dispose()
+            if isinstance(err, GabrielError) and deadline.aborted and not (signal is not None and signal.aborted):
+                raise missed_deadline(err) from err
             raise
+        queued = time.monotonic() - queued_at
         try:
             fields: dict[str, Any] = {
                 "channel": msg.channel,
@@ -463,7 +481,9 @@ class ChatApi:
                     fields["reply_broadcast"] = True
             try:
                 res = await self._core.call_web_api(
-                    "chat.postMessage", fields, RequestOpts(reason="webapp_message_send", signal=combined)
+                    "chat.postMessage",
+                    fields,
+                    RequestOpts(reason="webapp_message_send", signal=combined, attempts=attempts),
                 )
             except GabrielError as err:
                 # Dual-channel confirmation: if the WebSocket already delivered our message, the send succeeded.
@@ -472,7 +492,7 @@ class ChatApi:
                     self._registry.register_sent_ts(echoed)
                     return echoed
                 if deadline.aborted and not (signal is not None and signal.aborted):
-                    raise GabrielError("NETWORK_TIMEOUT", "chat.postMessage exceeded item_deadline", cause=err) from err
+                    raise missed_deadline(err) from err
                 raise
             message = res.get("message")
             ts = res.get("ts")

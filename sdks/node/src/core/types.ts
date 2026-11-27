@@ -1,3 +1,5 @@
+import type { RequestAttempt } from "../errors.js";
+
 /** An unmodified downstream WebSocket frame. */
 export interface RawWsFrame {
   type?: string;
@@ -28,6 +30,11 @@ export interface RequestOpts {
   retry?: "auto" | "safe" | "none";
   /** Value for the `_x_reason` telemetry field. */
   reason?: string;
+  /**
+   * Receives every failed HTTP attempt as it happens, so a caller that aborts the request
+   * (a deadline) can still say what the attempts ran into.
+   */
+  attempts?: RequestAttempt[];
 }
 
 /** Minimal WebSocket surface the SDK needs (matches the `ws` package). */

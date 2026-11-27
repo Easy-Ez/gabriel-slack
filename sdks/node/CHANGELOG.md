@@ -6,6 +6,21 @@ All notable changes to `gabriel-slack` are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `chat.itemDeadlineMs` defaults to **75000** (was 30000). The deadline covers the wait for a send
+  slot and every HTTP attempt; 30s only fit two of the four 15s attempts.
+- A post that misses its deadline while still waiting for a send slot now fails with
+  `NETWORK_TIMEOUT` instead of `CANCELLED`.
+
+### Added
+- `GabrielError.attempts`: transport errors raised after HTTP retries, and posts that miss
+  `itemDeadlineMs`, list each failed attempt as `{ outcome, durationMs, detail? }` (`timeout`,
+  `network` with the transport code such as `ECONNRESET`, `server_error`, `rate_limited`,
+  `slack_error`, `aborted`). The error message summarizes them together with the time spent
+  waiting for a send slot, e.g. `chat.postMessage exceeded itemDeadlineMs (75000ms): waited 0.0s
+  for a send slot; 2 attempts: #1 network ECONNRESET after 0.3s; #2 timeout after 15.0s`.
+  `RequestOpts.attempts` collects them for callers of `core.callWebApi`.
+
 ## [0.8.0] - 2026-11-17
 
 ### Added

@@ -6,6 +6,20 @@ All notable changes to the Python SDK are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `ChatSchedulerOptions.item_deadline` defaults to **75 s** (was 30 s). The deadline covers the
+  wait for a send slot and every HTTP attempt; 30 s only fit two of the four 15 s attempts.
+- A post that misses its deadline while still waiting for a send slot now raises
+  `NETWORK_TIMEOUT` instead of `CANCELLED`.
+
+### Added
+- `GabrielError.attempts`: transport errors raised after HTTP retries, and posts that miss
+  `item_deadline`, list each failed attempt as `RequestAttempt(outcome, duration, detail)`
+  (`timeout` with the httpx timeout class, `network` with the errno name such as `ECONNRESET`,
+  `server_error`, `rate_limited`, `slack_error`, `aborted`). The error message summarizes them
+  together with the time spent waiting for a send slot. `RequestOpts.attempts` collects them for
+  callers of `core.call_web_api`.
+
 ## [0.8.0] - 2026-11-17
 
 ### Added

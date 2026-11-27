@@ -340,9 +340,15 @@ the same block: treat it as a display hint, never as proof of who wrote a messag
 
 ## Errors
 
-All APIs reject with `GabrielError { code, message, retryable, rawSlackError?, retryAfterMs? }`.
+All APIs reject with `GabrielError { code, message, retryable, rawSlackError?, retryAfterMs?, attempts? }`.
 Retryable errors (`RATE_LIMITED`, `NETWORK_TIMEOUT`, `SOCKET_CLOSED`, `SERVER_ERROR`, …) were
-already retried, so don't add another retry loop. Handle the non-retryable ones:
+already retried, so don't add another retry loop. When HTTP retries run out, or a post misses
+`chat.itemDeadlineMs` (default 75s, covering the wait for a send slot and every attempt),
+`attempts` lists how each try ended — `{ outcome, durationMs, detail? }` with outcome `timeout`,
+`network` (detail: `ECONNRESET`, `UND_ERR_CONNECT_TIMEOUT`, …), `server_error`, `rate_limited`,
+`slack_error` or `aborted` — and the message summarizes it:
+`chat.postMessage exceeded itemDeadlineMs (75000ms): waited 0.0s for a send slot; 4 attempts: #1 timeout after 15.0s; …`.
+Handle the non-retryable ones:
 
 ```typescript
 import { GabrielError } from "gabriel-slack";
@@ -381,7 +387,7 @@ new GabrielClient({
                  executorKey: "channel", handlerTimeoutMs: 300_000 },
   hydration: { hydrateBudgetMs: 1_000, backfillBudgetMs: 5_000, preloadUsergroups: true },
   loopGuard: { includeSelfMessages: false, maxAutoRepliesPerMinute: 5 },
-  chat: { globalSendConcurrency: 4, itemDeadlineMs: 30_000, streamUpdatesPerSecond: 2,
+  chat: { globalSendConcurrency: 4, itemDeadlineMs: 75_000, streamUpdatesPerSecond: 2,
           streamMinIntervalMs: 500, interruptedNotice: "\n\n_(interrupted)_" },
   attribution: { icon: ":robot_face:", name: "Paimon", role: "Assistant", review: "unconfirmed" },  // off by default
   recovery: { maxPagesPerChannel: 10, watchedThreadsLimit: 100, maxExplicitThreadWatches: 500,
